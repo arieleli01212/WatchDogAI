@@ -15,4 +15,4 @@ addopts = "-v --tb=short"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*", "watchdog*"]
+include = ["src*"]
