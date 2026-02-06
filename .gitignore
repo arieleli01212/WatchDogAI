@@ -11,3 +11,4 @@ models/*.pth
 *.egg-info/
 dist/
 build/
+.claude/
