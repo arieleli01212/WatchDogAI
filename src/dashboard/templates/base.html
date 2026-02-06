@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}WatchDogAI{% endblock %}</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+            background: #0f1117;
+            color: #d1d5db;
+            min-height: 100vh;
+        }
+
+        nav {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            padding: 0.75rem 1.5rem;
+            background: #161822;
+            border-bottom: 1px solid #2a2d3a;
+        }
+
+        nav .brand {
+            font-weight: 700;
+            font-size: 1.15rem;
+            color: #60a5fa;
+            text-decoration: none;
+        }
+
+        nav a {
+            color: #9ca3af;
+            text-decoration: none;
+            font-size: 0.95rem;
+            transition: color 0.15s;
+        }
+
+        nav a:hover, nav a.active { color: #f9fafb; }
+
+        .container {
+            max-width: 1200px;
+            margin: 1.5rem auto;
+            padding: 0 1.5rem;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-normal  { background: #065f46; color: #6ee7b7; }
+        .badge-violence { background: #7f1d1d; color: #fca5a5; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid #2a2d3a;
+        }
+
+        th { color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+        .pagination {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+        .pagination a, .pagination span {
+            padding: 0.35rem 0.75rem;
+            border-radius: 0.375rem;
+            font-size: 0.85rem;
+            text-decoration: none;
+            color: #d1d5db;
+            background: #1e2030;
+            border: 1px solid #2a2d3a;
+        }
+
+        .pagination span.current { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+        .pagination a:hover { background: #2a2d3a; }
+
+        .snapshot-thumb { width: 80px; height: 45px; object-fit: cover; border-radius: 4px; }
+    </style>
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <nav>
+        <a class="brand" href="/">WatchDogAI</a>
+        <a href="/">Live View</a>
+        <a href="/alerts">Alerts</a>
+    </nav>
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

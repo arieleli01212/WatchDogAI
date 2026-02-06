@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Alerts - WatchDogAI{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom:0.25rem;">Alerts</h1>
+
+<form method="get" action="/alerts" style="margin-bottom:0.5rem;">
+    <label for="status" style="font-size:0.85rem;color:#9ca3af;">Filter by status:</label>
+    <select name="status" id="status" onchange="this.form.submit()"
+            style="background:#1e2030;color:#d1d5db;border:1px solid #2a2d3a;padding:0.3rem 0.5rem;border-radius:0.25rem;">
+        <option value="">All</option>
+        <option value="new"{% if status_filter == "new" %} selected{% endif %}>New</option>
+        <option value="reviewed"{% if status_filter == "reviewed" %} selected{% endif %}>Reviewed</option>
+        <option value="dismissed"{% if status_filter == "dismissed" %} selected{% endif %}>Dismissed</option>
+    </select>
+</form>
+
+<table>
+    <thead>
+        <tr>
+            <th>Time</th>
+            <th>Camera</th>
+            <th>Confidence</th>
+            <th>Status</th>
+            <th>Snapshot</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for alert in alerts %}
+        <tr>
+            <td>{{ alert.timestamp }}</td>
+            <td>{{ alert.camera_id }}</td>
+            <td>{{ "%.1f"|format(alert.confidence * 100) }} %</td>
+            <td><span class="badge {% if alert.status == 'new' %}badge-violence{% else %}badge-normal{% endif %}">{{ alert.status }}</span></td>
+            <td>
+                {% if alert.snapshot_path %}
+                <img class="snapshot-thumb" src="/snapshots/{{ alert.snapshot_path }}" alt="snapshot">
+                {% else %}
+                &mdash;
+                {% endif %}
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" style="text-align:center;color:#6b7280;">No alerts found.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if total_pages > 1 %}
+<div class="pagination">
+    {% if page > 1 %}
+    <a href="/alerts?page={{ page - 1 }}{% if status_filter %}&status={{ status_filter }}{% endif %}">Prev</a>
+    {% endif %}
+
+    {% for p in range(1, total_pages + 1) %}
+        {% if p == page %}
+        <span class="current">{{ p }}</span>
+        {% else %}
+        <a href="/alerts?page={{ p }}{% if status_filter %}&status={{ status_filter }}{% endif %}">{{ p }}</a>
+        {% endif %}
+    {% endfor %}
+
+    {% if page < total_pages %}
+    <a href="/alerts?page={{ page + 1 }}{% if status_filter %}&status={{ status_filter }}{% endif %}">Next</a>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock %}
