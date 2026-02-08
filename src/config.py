@@ -39,7 +39,7 @@ class Settings:
 
     camera_source: int | str = field(default_factory=_get_camera_source)
     confidence_threshold: float = field(
-        default_factory=lambda: float(os.getenv("CONFIDENCE_THRESHOLD", "0.92"))
+        default_factory=lambda: float(os.getenv("CONFIDENCE_THRESHOLD", "0.85"))
     )
     consecutive_hits: int = field(
         default_factory=lambda: int(os.getenv("CONSECUTIVE_HITS", "3"))
@@ -48,7 +48,13 @@ class Settings:
         default_factory=lambda: int(os.getenv("COOLDOWN_SECONDS", "5"))
     )
     clip_length: int = field(
-        default_factory=lambda: int(os.getenv("CLIP_LENGTH", "16"))
+        default_factory=lambda: int(os.getenv("CLIP_LENGTH", "90"))
+    )
+    pre_event_seconds: float = field(
+        default_factory=lambda: float(os.getenv("PRE_EVENT_SECONDS", "3"))
+    )
+    post_event_seconds: float = field(
+        default_factory=lambda: float(os.getenv("POST_EVENT_SECONDS", "2"))
     )
     dashboard_port: int = field(
         default_factory=lambda: int(os.getenv("DASHBOARD_PORT", "8000"))
@@ -59,8 +65,8 @@ class Settings:
     db_path: str = field(
         default_factory=lambda: os.getenv("DB_PATH", "data/watchdog.db")
     )
-    snapshot_dir: str = field(
-        default_factory=lambda: os.getenv("SNAPSHOT_DIR", "data/snapshots")
+    clip_dir: str = field(
+        default_factory=lambda: os.getenv("CLIP_DIR", "data/clips")
     )
     log_dir: str = field(
         default_factory=lambda: os.getenv("LOG_DIR", "logs")

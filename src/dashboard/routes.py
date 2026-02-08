@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from typing import Optional
 
 import cv2
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Path
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 router = APIRouter()
@@ -102,6 +101,21 @@ async def api_alerts(
     else:
         alerts = []
     return JSONResponse(alerts)
+
+
+@router.delete("/api/alerts/{alert_id}")
+async def api_delete_alert(
+    request: Request,
+    alert_id: int = Path(..., ge=1),
+) -> JSONResponse:
+    """Delete an alert and its clip file."""
+    alert_manager = request.app.state.alert_manager
+    if alert_manager is None:
+        return JSONResponse({"error": "alert manager not available"}, status_code=503)
+    deleted = alert_manager.delete_alert(alert_id)
+    if not deleted:
+        return JSONResponse({"error": "alert not found"}, status_code=404)
+    return JSONResponse({"ok": True})
 
 
 # ---------------------------------------------------------------------------

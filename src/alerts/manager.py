@@ -1,4 +1,4 @@
-"""Alert manager: coordinates detection events, snapshots, and storage."""
+"""Alert manager: coordinates clip saving and storage."""
 
 from __future__ import annotations
 
@@ -7,9 +7,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import cv2
-import numpy as np
-
 from src.alerts.storage import AlertStorage
 from src.config import Settings
 
@@ -17,54 +14,61 @@ logger = logging.getLogger(__name__)
 
 
 class AlertManager:
-    """Orchestrates alert creation from detection events.
+    """Orchestrates alert creation from clip events.
 
-    Handles cooldown enforcement, snapshot saving, and database persistence.
+    Handles cooldown enforcement, database persistence, and alert deletion.
     """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self.storage = AlertStorage(settings.db_path)
-        self._snapshot_dir = Path(settings.snapshot_dir)
-        self._snapshot_dir.mkdir(parents=True, exist_ok=True)
         self._last_alert_time: float | None = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def on_detection(
+    def on_clip_saved(
         self,
-        label: str,
         confidence: float,
-        frame: np.ndarray,
+        clip_path: str,
         camera_id: str = "cam0",
     ) -> None:
-        """Process a detection result. Creates an alert when appropriate."""
-        if label != "violence":
-            return
-        if confidence < self._settings.confidence_threshold:
-            return
+        """Create an alert after a clip has been written to disk."""
         if self._is_in_cooldown():
             return
 
         now = datetime.now(tz=timezone.utc)
-        snapshot_path = self._save_snapshot(frame, now, camera_id)
-
         self.storage.save_alert(
             timestamp=now.isoformat(),
             confidence=confidence,
-            snapshot_path=str(snapshot_path),
+            clip_path=clip_path,
             camera_id=camera_id,
         )
 
         self._last_alert_time = time.monotonic()
         logger.info(
-            "Alert created: camera=%s confidence=%.2f snapshot=%s",
+            "Alert created: camera=%s confidence=%.2f clip=%s",
             camera_id,
             confidence,
-            snapshot_path,
+            clip_path,
         )
+
+    def delete_alert(self, alert_id: int) -> bool:
+        """Delete an alert and its clip file from disk."""
+        alert = self.storage.get_alert(alert_id)
+        if alert is None:
+            return False
+
+        # Remove the clip file if it exists
+        clip_file = Path(alert["clip_path"])
+        if clip_file.is_file():
+            clip_file.unlink()
+            logger.info("Deleted clip file: %s", clip_file)
+
+        self.storage.delete_alert(alert_id)
+        logger.info("Deleted alert id=%d", alert_id)
+        return True
 
     def get_alerts(
         self,
@@ -98,17 +102,3 @@ class AlertManager:
             return False
         elapsed = time.monotonic() - self._last_alert_time
         return elapsed < self._settings.cooldown_seconds
-
-    def _save_snapshot(
-        self,
-        frame: np.ndarray,
-        now: datetime,
-        camera_id: str,
-    ) -> Path:
-        date_dir = self._snapshot_dir / now.strftime("%Y-%m-%d")
-        date_dir.mkdir(parents=True, exist_ok=True)
-
-        filename = f"{now.strftime('%H-%M-%S')}_{camera_id}.jpg"
-        path = date_dir / filename
-        cv2.imwrite(str(path), frame)
-        return path

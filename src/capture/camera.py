@@ -66,6 +66,11 @@ class Camera:
                 return None
             return np.stack(list(self._buffer))
 
+    def get_buffer(self) -> list[np.ndarray]:
+        """Return all frames currently in the sliding window buffer."""
+        with self._lock:
+            return list(self._buffer)
+
     def get_latest_frame(self) -> Optional[np.ndarray]:
         """Return the most recently captured frame, or None if no frames yet."""
         with self._lock:

@@ -23,7 +23,7 @@ class AlertStorage:
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp     TEXT    NOT NULL,
                 confidence    REAL    NOT NULL,
-                snapshot_path TEXT    NOT NULL,
+                clip_path     TEXT    NOT NULL,
                 camera_id     TEXT    NOT NULL,
                 status        TEXT    NOT NULL DEFAULT 'new'
             )
@@ -35,14 +35,14 @@ class AlertStorage:
         self,
         timestamp: str,
         confidence: float,
-        snapshot_path: str,
+        clip_path: str,
         camera_id: str,
     ) -> int:
         """Insert a new alert and return its row id."""
         cursor = self._conn.execute(
-            "INSERT INTO alerts (timestamp, confidence, snapshot_path, camera_id) "
+            "INSERT INTO alerts (timestamp, confidence, clip_path, camera_id) "
             "VALUES (?, ?, ?, ?)",
-            (timestamp, confidence, snapshot_path, camera_id),
+            (timestamp, confidence, clip_path, camera_id),
         )
         self._conn.commit()
         return cursor.lastrowid  # type: ignore[return-value]
@@ -53,18 +53,26 @@ class AlertStorage:
         offset: int = 0,
         status: str | None = None,
     ) -> list[dict]:
-        """Return alerts ordered by id, with optional status filter."""
+        """Return alerts ordered by id desc, with optional status filter."""
         if status is not None:
             cursor = self._conn.execute(
-                "SELECT * FROM alerts WHERE status = ? ORDER BY id LIMIT ? OFFSET ?",
+                "SELECT * FROM alerts WHERE status = ? ORDER BY id DESC LIMIT ? OFFSET ?",
                 (status, limit, offset),
             )
         else:
             cursor = self._conn.execute(
-                "SELECT * FROM alerts ORDER BY id LIMIT ? OFFSET ?",
+                "SELECT * FROM alerts ORDER BY id DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             )
         return [dict(row) for row in cursor.fetchall()]
+
+    def get_alert(self, alert_id: int) -> dict | None:
+        """Return a single alert by id, or None if not found."""
+        cursor = self._conn.execute(
+            "SELECT * FROM alerts WHERE id = ?", (alert_id,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
     def get_alert_count(self, status: str | None = None) -> int:
         """Return total number of alerts, optionally filtered by status."""
@@ -80,6 +88,14 @@ class AlertStorage:
         """Update the status of an alert. Returns True if the alert existed."""
         cursor = self._conn.execute(
             "UPDATE alerts SET status = ? WHERE id = ?", (status, alert_id)
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_alert(self, alert_id: int) -> bool:
+        """Delete an alert by id. Returns True if the alert existed."""
+        cursor = self._conn.execute(
+            "DELETE FROM alerts WHERE id = ?", (alert_id,)
         )
         self._conn.commit()
         return cursor.rowcount > 0

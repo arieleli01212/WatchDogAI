@@ -4,7 +4,6 @@ import logging
 import threading
 import time
 import signal
-import sys
 
 import cv2
 import uvicorn
@@ -13,6 +12,7 @@ from src.config import get_settings
 from src.capture.camera import Camera
 from src.detector.model import ViolenceDetector
 from src.alerts.manager import AlertManager
+from src.alerts.clip_recorder import ClipRecorder
 from src.dashboard.app import create_app
 
 
@@ -34,7 +34,7 @@ def setup_logging(settings):
     return logging.getLogger("watchdog")
 
 
-def capture_loop(camera, logger, stop_event):
+def capture_loop(camera, clip_recorder, logger, stop_event):
     """Continuously read frames from the camera at full speed."""
     logger.info("Capture loop started")
     while not stop_event.is_set():
@@ -48,13 +48,14 @@ def capture_loop(camera, logger, stop_event):
             time.sleep(0.03)
             continue
         camera.add_frame(frame)
+        clip_recorder.add_frame(frame)
         # Pace video files to their native FPS
         if isinstance(camera._source, str) and camera.fps > 0:
             time.sleep(1.0 / camera.fps)
     logger.info("Capture loop stopped")
 
 
-def detection_loop(camera, detector, alert_manager, settings, logger, stop_event):
+def detection_loop(camera, detector, clip_recorder, settings, logger, stop_event):
     """Run inference on the latest frame for real-time detection.
 
     Uses temporal smoothing: only triggers an alert after N consecutive
@@ -103,9 +104,8 @@ def detection_loop(camera, detector, alert_manager, settings, logger, stop_event
                 "last_update": time.time(),
             }
 
-        # Save the analyzed frame as snapshot (not the live frame)
-        if is_confirmed_violence:
-            alert_manager.on_detection("violence", confidence, frame)
+        # Signal clip recorder with the detection result
+        clip_recorder.on_detection(is_confirmed_violence, confidence)
 
     logger.info("Detection loop stopped")
 
@@ -123,6 +123,11 @@ def main():
     camera = Camera(source=settings.camera_source, clip_length=settings.clip_length)
     detector = ViolenceDetector()
     alert_manager = AlertManager(settings)
+    clip_recorder = ClipRecorder(
+        settings=settings,
+        alert_manager=alert_manager,
+        fps=camera.fps if camera.fps > 0 else 30.0,
+    )
 
     # Create dashboard app and wire components
     app = create_app()
@@ -145,7 +150,7 @@ def main():
     # Start capture loop - reads frames continuously at full speed
     capture_thread = threading.Thread(
         target=capture_loop,
-        args=(camera, logger, stop_event),
+        args=(camera, clip_recorder, logger, stop_event),
         daemon=True,
     )
     capture_thread.start()
@@ -154,7 +159,7 @@ def main():
     # Start detection loop - runs inference periodically
     detection_thread = threading.Thread(
         target=detection_loop,
-        args=(camera, detector, alert_manager, settings, logger, stop_event),
+        args=(camera, detector, clip_recorder, settings, logger, stop_event),
         daemon=True,
     )
     detection_thread.start()

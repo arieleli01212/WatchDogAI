@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
@@ -22,6 +23,11 @@ def create_app() -> FastAPI:
         "last_update": None,
     }
     app.state.alert_manager = None
+
+    # Mount clip files for serving video
+    clips_dir = Path("data/clips")
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/clips", StaticFiles(directory=str(clips_dir)), name="clips")
 
     from src.dashboard.routes import router  # noqa: E402
 

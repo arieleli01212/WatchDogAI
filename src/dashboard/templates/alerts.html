@@ -23,26 +23,31 @@
             <th>Camera</th>
             <th>Confidence</th>
             <th>Status</th>
-            <th>Snapshot</th>
+            <th>Clip</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
         {% for alert in alerts %}
-        <tr>
+        <tr id="alert-{{ alert.id }}">
             <td>{{ alert.timestamp }}</td>
             <td>{{ alert.camera_id }}</td>
             <td>{{ "%.1f"|format(alert.confidence * 100) }} %</td>
             <td><span class="badge {% if alert.status == 'new' %}badge-violence{% else %}badge-normal{% endif %}">{{ alert.status }}</span></td>
             <td>
-                {% if alert.snapshot_path %}
-                <img class="snapshot-thumb" src="/snapshots/{{ alert.snapshot_path }}" alt="snapshot">
+                {% if alert.clip_path %}
+                {% set rel = alert.clip_path.replace('data/clips/', '').replace('data\\clips\\', '') %}
+                <video class="clip-thumb" src="/clips/{{ rel }}" muted preload="metadata" onclick="this.paused ? this.play() : this.pause()"></video>
                 {% else %}
                 &mdash;
                 {% endif %}
             </td>
+            <td>
+                <button class="btn-delete" onclick="deleteAlert({{ alert.id }})">Delete</button>
+            </td>
         </tr>
         {% else %}
-        <tr><td colspan="5" style="text-align:center;color:#6b7280;">No alerts found.</td></tr>
+        <tr><td colspan="6" style="text-align:center;color:#6b7280;">No alerts found.</td></tr>
         {% endfor %}
     </tbody>
 </table>
@@ -66,4 +71,19 @@
     {% endif %}
 </div>
 {% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function deleteAlert(id) {
+    if (!confirm('Delete this alert and its video clip?')) return;
+    const res = await fetch('/api/alerts/' + id, { method: 'DELETE' });
+    if (res.ok) {
+        const row = document.getElementById('alert-' + id);
+        if (row) row.remove();
+    } else {
+        alert('Failed to delete alert.');
+    }
+}
+</script>
 {% endblock %}
