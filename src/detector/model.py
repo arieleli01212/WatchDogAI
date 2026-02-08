@@ -1,12 +1,16 @@
 """Violence detection using a pre-trained ViT image classifier.
 
-Uses the jaranohaal/vit-base-violence-detection model from HuggingFace,
-loaded via timm. Classifies individual frames as violent or non-violent.
+Uses the jaranohaal/vit-base-violence-detection model from HuggingFace.
+Model weights are in timm format, preprocessing uses the transformers
+ViTImageProcessor for correct normalization (no center-crop).
+
+Label mapping: class 0 = normal, class 1 = violence.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -16,7 +20,9 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 MODEL_HF_ID = "jaranohaal/vit-base-violence-detection"
-LABELS = ("normal", "violence")  # class 0 = normal, class 1 = violence
+LOCAL_MODEL_DIR = Path(__file__).resolve().parent.parent.parent / "models" / "vit-violence-detection"
+
+VIOLENCE_CLASS_IDX = 1
 
 
 class ViolenceDetector:
@@ -44,30 +50,42 @@ class ViolenceDetector:
         self._model_name = "vit-violence-detection"
 
         logger.info("Loading model %s on %s...", model_path, self._device)
-        self._model, self._transform = self._load_model(model_path)
+        self._model, self._processor = self._load_model(model_path)
         self._model.to(self._device)
         self._model.eval()
         logger.info("Model loaded successfully.")
 
     def _load_model(self, model_path: str):
-        """Load ViT model via timm with weights from HuggingFace."""
-        import timm
-        from huggingface_hub import hf_hub_download
-        from safetensors.torch import load_file
-        from timm.data import resolve_data_config
-        from timm.data.transforms_factory import create_transform
+        """Load timm ViT model with transformers processor for preprocessing.
 
-        # Create architecture and load weights
+        Loads from local ``models/vit-violence-detection/`` directory if it
+        exists, otherwise falls back to downloading from HuggingFace.
+        """
+        import timm
+        from safetensors.torch import load_file
+        from transformers import ViTImageProcessor
+
+        # Prefer local model directory, fall back to HuggingFace
+        if LOCAL_MODEL_DIR.exists() and (LOCAL_MODEL_DIR / "model.safetensors").exists():
+            source = str(LOCAL_MODEL_DIR)
+            weights_path = str(LOCAL_MODEL_DIR / "model.safetensors")
+            logger.info("Loading model from local directory: %s", source)
+        else:
+            from huggingface_hub import hf_hub_download
+            source = model_path
+            weights_path = hf_hub_download(model_path, "model.safetensors")
+            logger.info("Local model not found, downloading from HuggingFace: %s", model_path)
+
+        # Create architecture and load weights (timm format)
         model = timm.create_model("vit_base_patch16_224", pretrained=False, num_classes=2)
-        weights_path = hf_hub_download(model_path, "model.safetensors")
         state_dict = load_file(weights_path)
         model.load_state_dict(state_dict, strict=True)
 
-        # Build preprocessing transform
-        config = resolve_data_config(model.pretrained_cfg)
-        transform = create_transform(**config)
+        # Use transformers processor for correct preprocessing
+        # (direct resize to 224x224, no center-crop)
+        processor = ViTImageProcessor.from_pretrained(source)
 
-        return model, transform
+        return model, processor
 
     def predict(self, clip: np.ndarray) -> tuple[str, float]:
         """Classify a video clip by sampling frames.
@@ -92,14 +110,14 @@ class ViolenceDetector:
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(frame_rgb)
 
-            tensor = self._transform(image).unsqueeze(0).to(self._device)
+            inputs = self._processor(images=image, return_tensors="pt")
+            tensor = inputs["pixel_values"].to(self._device)
 
             with torch.no_grad():
                 logits = self._model(tensor)
                 probs = torch.softmax(logits, dim=1)
 
-            # Class 1 = violence
-            violence_scores.append(probs[0, 1].item())
+            violence_scores.append(probs[0, VIOLENCE_CLASS_IDX].item())
 
         avg_violence = sum(violence_scores) / len(violence_scores)
 

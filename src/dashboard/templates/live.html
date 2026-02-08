@@ -50,7 +50,7 @@
 
     <div id="status-bar" class="status-bar status-normal">
         <span class="label" id="det-label">NORMAL</span>
-        <span class="confidence" id="det-confidence">0.0 %</span>
+        <span class="confidence" id="det-confidence">Violence: 0.0 %</span>
     </div>
 
     <div class="feed-container">
@@ -73,7 +73,7 @@
             const confEl = document.getElementById("det-confidence");
 
             labelEl.textContent = det.label.toUpperCase();
-            confEl.textContent = (det.confidence * 100).toFixed(1) + " %";
+            confEl.textContent = "Violence: " + (det.violence_score * 100).toFixed(1) + " %";
 
             if (det.label === "violence") {
                 bar.className = "status-bar status-violence";
@@ -83,7 +83,7 @@
         } catch (_) { /* ignore transient errors */ }
     }
 
-    setInterval(poll, 2000);
+    setInterval(poll, 500);
     poll();
 })();
 </script>

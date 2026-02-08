@@ -55,34 +55,57 @@ def capture_loop(camera, logger, stop_event):
 
 
 def detection_loop(camera, detector, alert_manager, settings, logger, stop_event):
-    """Run inference periodically on buffered clips."""
+    """Run inference on the latest frame for real-time detection.
+
+    Uses temporal smoothing: only triggers an alert after N consecutive
+    high-confidence violence detections. This eliminates false positives
+    while keeping detection responsive.
+    """
     logger.info("Detection loop started")
+    consecutive_violence = 0
+    required_hits = settings.consecutive_hits
 
     while not stop_event.is_set():
-        clip = camera.get_clip()
-        if clip is None:
-            time.sleep(0.1)
+        frame = camera.get_latest_frame()
+        if frame is None:
+            time.sleep(0.05)
             continue
 
-        label, confidence = detector.predict(clip)
-        logger.debug(f"Detection: {label} ({confidence:.2f})")
+        label, confidence = detector.predict_frame(frame)
+
+        # Compute the violence probability regardless of label
+        violence_pct = confidence if label == "violence" else 1.0 - confidence
+
+        # Track consecutive violence detections above threshold
+        if label == "violence" and confidence >= settings.confidence_threshold:
+            consecutive_violence += 1
+        else:
+            consecutive_violence = 0
+
+        # Determine the smoothed label for display and alerting
+        is_confirmed_violence = consecutive_violence >= required_hits
+        smoothed_label = "violence" if is_confirmed_violence else "normal"
+
+        logger.debug(
+            "Detection: %s (violence=%.1f%%) streak=%d/%d -> %s",
+            label, violence_pct * 100, consecutive_violence, required_hits, smoothed_label,
+        )
 
         # Update dashboard status
         app_state = getattr(detection_loop, '_app_state', None)
         if app_state:
             app_state.detector_status = {
-                "label": label,
+                "label": smoothed_label,
                 "confidence": confidence,
+                "violence_score": round(violence_pct, 4),
+                "streak": consecutive_violence,
+                "required": required_hits,
                 "last_update": time.time(),
             }
 
-        # Process alert
-        latest_frame = camera.get_latest_frame()
-        if latest_frame is not None:
-            alert_manager.on_detection(label, confidence, latest_frame)
-
-        # Wait before next inference to avoid hammering CPU
-        time.sleep(0.5)
+        # Save the analyzed frame as snapshot (not the live frame)
+        if is_confirmed_violence:
+            alert_manager.on_detection("violence", confidence, frame)
 
     logger.info("Detection loop stopped")
 

@@ -55,7 +55,8 @@ Set via environment variables or `.env` file:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | CAMERA_SOURCE | 0 | Webcam index (int) or video file path |
-| CONFIDENCE_THRESHOLD | 0.85 | Violence confidence threshold for alerts |
+| CONFIDENCE_THRESHOLD | 0.92 | Violence confidence threshold for alerts |
+| CONSECUTIVE_HITS | 3 | Consecutive high-confidence detections required before alerting |
 | COOLDOWN_SECONDS | 5 | Minimum seconds between alerts |
 | DASHBOARD_PORT | 8000 | Web dashboard port |
 | DB_PATH | data/watchdog.db | SQLite database path |

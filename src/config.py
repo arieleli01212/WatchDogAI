@@ -39,7 +39,10 @@ class Settings:
 
     camera_source: int | str = field(default_factory=_get_camera_source)
     confidence_threshold: float = field(
-        default_factory=lambda: float(os.getenv("CONFIDENCE_THRESHOLD", "0.85"))
+        default_factory=lambda: float(os.getenv("CONFIDENCE_THRESHOLD", "0.92"))
+    )
+    consecutive_hits: int = field(
+        default_factory=lambda: int(os.getenv("CONSECUTIVE_HITS", "3"))
     )
     cooldown_seconds: int = field(
         default_factory=lambda: int(os.getenv("COOLDOWN_SECONDS", "5"))
