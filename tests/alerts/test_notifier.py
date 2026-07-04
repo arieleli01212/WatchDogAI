@@ -49,9 +49,8 @@ class TestDelivery:
         assert kwargs["json"] == ALERT
         assert "files" not in kwargs
 
-    @patch("src.alerts.notifier.time.sleep")
     @patch("src.alerts.notifier.requests")
-    def test_retries_until_success(self, mock_requests, mock_sleep, notifier):
+    def test_retries_until_success(self, mock_requests, notifier):
         ok = MagicMock()
         mock_requests.post.side_effect = [ConnectionError("down"), ok]
 
@@ -59,20 +58,49 @@ class TestDelivery:
 
         assert mock_requests.post.call_count == 2
 
-    @patch("src.alerts.notifier.time.sleep")
     @patch("src.alerts.notifier.requests")
-    def test_gives_up_after_max_retries(self, mock_requests, mock_sleep, notifier):
+    def test_gives_up_after_max_retries(self, mock_requests, notifier):
         mock_requests.post.side_effect = ConnectionError("down")
 
         notifier._deliver(ALERT, "missing.mp4")  # must not raise
 
         assert mock_requests.post.call_count == 3
 
-    @patch("src.alerts.notifier.time.sleep")
     @patch("src.alerts.notifier.requests")
-    def test_http_error_triggers_retry(self, mock_requests, mock_sleep, notifier):
+    def test_server_error_triggers_retry(self, mock_requests, notifier):
         bad = MagicMock()
         bad.raise_for_status.side_effect = RuntimeError("500")
+        ok = MagicMock()
+        mock_requests.post.side_effect = [bad, ok]
+
+        notifier._deliver(ALERT, "missing.mp4")
+
+        assert mock_requests.post.call_count == 2
+
+    @patch("src.alerts.notifier.requests")
+    def test_4xx_rejection_not_retried(self, mock_requests, notifier):
+        import requests as real_requests
+
+        error = real_requests.exceptions.HTTPError(
+            response=MagicMock(status_code=422)
+        )
+        bad = MagicMock()
+        bad.raise_for_status.side_effect = error
+        mock_requests.post.return_value = bad
+
+        notifier._deliver(ALERT, "missing.mp4")
+
+        assert mock_requests.post.call_count == 1  # rejected, not retried
+
+    @patch("src.alerts.notifier.requests")
+    def test_429_is_retried(self, mock_requests, notifier):
+        import requests as real_requests
+
+        error = real_requests.exceptions.HTTPError(
+            response=MagicMock(status_code=429)
+        )
+        bad = MagicMock()
+        bad.raise_for_status.side_effect = error
         ok = MagicMock()
         mock_requests.post.side_effect = [bad, ok]
 
@@ -101,3 +129,20 @@ class TestQueueing:
                     n.notify(ALERT, "missing.mp4")  # must never block or raise
         finally:
             n.close(timeout=2)
+
+    @patch("src.alerts.notifier.requests")
+    def test_close_interrupts_retry_backoff(self, mock_requests):
+        """Shutdown must not wait out minutes of exponential backoff."""
+        import time
+
+        mock_requests.post.side_effect = ConnectionError("down")
+        n = ControlCenterNotifier(
+            url="http://cc/alerts", max_retries=5, backoff_base=30.0
+        )
+        n.notify(ALERT, "missing.mp4")
+        time.sleep(0.2)  # let the worker enter the first backoff wait
+
+        start = time.monotonic()
+        n.close(timeout=5)
+        assert time.monotonic() - start < 3
+        assert not n._worker.is_alive()

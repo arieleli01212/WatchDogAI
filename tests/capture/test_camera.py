@@ -245,6 +245,7 @@ class TestRead:
         mock_capture.read.return_value = (False, None)
         mock_vc_cls.return_value = mock_capture
         cam = Camera(source="rtsp://example/stream")
+        cam.RECONNECT_BASE_DELAY = 0  # keep the interruptible wait instant
 
         for _ in range(Camera.FAILURES_BEFORE_RECONNECT):
             assert cam.read() is None
@@ -253,6 +254,22 @@ class TestRead:
         assert mock_vc_cls.call_count == 2
         mock_capture.release.assert_called()
         cam.release()
+
+    @patch("src.capture.camera.time.sleep")
+    @patch("src.capture.camera.cv2.VideoCapture")
+    def test_no_reopen_after_release(self, mock_vc_cls, mock_sleep, mock_capture):
+        """A reconnect pending during shutdown must not reopen the device."""
+        mock_capture.read.return_value = (False, None)
+        mock_vc_cls.return_value = mock_capture
+        cam = Camera(source="rtsp://example/stream")
+        cam.RECONNECT_BASE_DELAY = 0
+
+        # Simulate the capture thread waking from a backoff after shutdown
+        cam._consecutive_failures = Camera.FAILURES_BEFORE_RECONNECT
+        cam.release()
+        cam._recover()
+
+        assert mock_vc_cls.call_count == 1  # never reopened after release
 
     @patch("src.capture.camera.time.sleep")
     @patch("src.capture.camera.cv2.VideoCapture")

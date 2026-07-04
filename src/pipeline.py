@@ -139,6 +139,9 @@ class CameraPipeline:
         while not self._stop.is_set():
             frame, seq = self.camera.get_latest_frame_with_seq()
             if frame is None or seq == last_seq:
+                # Even without new frames, let an overdue recording finish
+                # (e.g. the camera died right after the incident)
+                self.clip_recorder.tick()
                 time.sleep(0.01)
                 continue
             last_seq = seq

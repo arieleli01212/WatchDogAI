@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,6 +28,27 @@ def _parse_source(raw: str) -> int | str:
         return int(raw)
     except ValueError:
         return raw
+
+
+def _validate_source(entry: dict, index: int) -> int | str:
+    """Extract and validate the 'source' of one CAMERAS entry."""
+    if "source" not in entry or entry["source"] is None:
+        raise ValueError(f"CAMERAS entry {index}: missing required 'source'")
+    source = entry["source"]
+    if isinstance(source, str):
+        return _parse_source(source)
+    if isinstance(source, bool) or not isinstance(source, (int, float)):
+        raise ValueError(
+            f"CAMERAS entry {index}: source must be a webcam index or URL/path, "
+            f"got {source!r}"
+        )
+    if isinstance(source, float):
+        if not source.is_integer():
+            raise ValueError(
+                f"CAMERAS entry {index}: webcam index must be an integer, got {source}"
+            )
+        return int(source)
+    return source
 
 
 @dataclass(frozen=True)
@@ -75,14 +97,17 @@ def _get_cameras() -> tuple[CameraConfig, ...]:
 
         cameras: list[CameraConfig] = []
         for i, entry in enumerate(entries):
-            source = entry["source"]
-            if isinstance(source, str):
-                source = _parse_source(source)
             cam_id = str(entry.get("id", f"cam{i}"))
+            # Camera ids end up in filenames, URLs, and MQTT topics
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", cam_id):
+                raise ValueError(
+                    f"CAMERAS entry {i}: id {cam_id!r} may only contain "
+                    "letters, digits, '-' and '_'"
+                )
             cameras.append(
                 CameraConfig(
                     id=cam_id,
-                    source=source,
+                    source=_validate_source(entry, i),
                     name=str(entry.get("name", "") or cam_id),
                     width=int(entry.get("width", 0)),
                     height=int(entry.get("height", 0)),
@@ -121,6 +146,9 @@ class Settings:
     )
     post_event_seconds: float = field(
         default_factory=lambda: float(os.getenv("POST_EVENT_SECONDS", "2"))
+    )
+    max_clip_seconds: float = field(
+        default_factory=lambda: float(os.getenv("MAX_CLIP_SECONDS", "30"))
     )
     dashboard_port: int = field(
         default_factory=lambda: int(os.getenv("DASHBOARD_PORT", "8000"))

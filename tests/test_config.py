@@ -179,6 +179,33 @@ class TestCamerasFromEnv:
         settings = Settings(cameras=cameras)
         assert settings.cameras == cameras
 
+    def test_unsafe_camera_id_rejected(self, monkeypatch):
+        # ids flow into filenames, URLs, and MQTT topics
+        monkeypatch.setenv("CAMERAS", '[{"id": "cam/../evil", "source": 0}]')
+        with pytest.raises(ValueError):
+            Settings()
+
+    def test_missing_source_rejected(self, monkeypatch):
+        monkeypatch.setenv("CAMERAS", '[{"id": "c1"}]')
+        with pytest.raises(ValueError):
+            Settings()
+
+    def test_null_source_rejected(self, monkeypatch):
+        monkeypatch.setenv("CAMERAS", '[{"id": "c1", "source": null}]')
+        with pytest.raises(ValueError):
+            Settings()
+
+    def test_integral_float_source_coerced(self, monkeypatch):
+        monkeypatch.setenv("CAMERAS", '[{"id": "c1", "source": 1.0}]')
+        settings = Settings()
+        assert settings.cameras[0].source == 1
+        assert isinstance(settings.cameras[0].source, int)
+
+    def test_fractional_source_rejected(self, monkeypatch):
+        monkeypatch.setenv("CAMERAS", '[{"id": "c1", "source": 1.5}]')
+        with pytest.raises(ValueError):
+            Settings()
+
 
 class TestGetSettings:
     """get_settings() should return a valid Settings instance."""

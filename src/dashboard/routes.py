@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path as FilePath
 from typing import Optional
 
 import cv2
@@ -10,6 +11,10 @@ from fastapi import APIRouter, Query, Request, Path
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 router = APIRouter()
+
+# Upper bound for pagination params: unbounded ints overflow SQLite's
+# 64-bit OFFSET binding into an HTTP 500
+MAX_OFFSET = 1_000_000
 
 IDLE_STATUS = {
     "label": "normal",
@@ -63,10 +68,19 @@ async def live_view(request: Request) -> HTMLResponse:
     )
 
 
+def _clip_url(clip_path: str, clip_dir: str) -> Optional[str]:
+    """Map a stored clip path to its /clips URL (None when outside clip_dir)."""
+    try:
+        rel = FilePath(clip_path).resolve().relative_to(FilePath(clip_dir).resolve())
+    except (ValueError, OSError):
+        return None
+    return "/clips/" + rel.as_posix()
+
+
 @router.get("/alerts", response_class=HTMLResponse)
 async def alerts_page(
     request: Request,
-    page: int = Query(1, ge=1),
+    page: int = Query(1, ge=1, le=MAX_OFFSET),
     status: Optional[str] = Query(None),
     camera_id: Optional[str] = Query(None),
 ) -> HTMLResponse:
@@ -86,6 +100,10 @@ async def alerts_page(
     else:
         alerts = []
         total = 0
+
+    clip_dir = request.app.state.settings.clip_dir
+    for alert in alerts:
+        alert["clip_url"] = _clip_url(alert.get("clip_path", ""), clip_dir)
 
     total_pages = max(1, (total + per_page - 1) // per_page)
 
@@ -158,7 +176,7 @@ async def api_counts(request: Request) -> JSONResponse:
 async def api_alerts(
     request: Request,
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     status: Optional[str] = Query(None),
     camera_id: Optional[str] = Query(None),
 ) -> JSONResponse:

@@ -49,9 +49,8 @@
             <td>{{ "%.1f"|format(alert.confidence * 100) }} %</td>
             <td><span class="badge {% if alert.status == 'new' %}badge-violence{% else %}badge-normal{% endif %}">{{ alert.status }}</span></td>
             <td>
-                {% if alert.clip_path %}
-                {% set rel = alert.clip_path.replace('data/clips/', '').replace('data\\clips\\', '') %}
-                <video class="clip-thumb" src="/clips/{{ rel }}" muted preload="metadata" onclick="this.paused ? this.play() : this.pause()"></video>
+                {% if alert.clip_url %}
+                <video class="clip-thumb" src="{{ alert.clip_url }}" muted preload="metadata" onclick="this.paused ? this.play() : this.pause()"></video>
                 {% else %}
                 &mdash;
                 {% endif %}
@@ -67,7 +66,7 @@
 </table>
 
 {% if total_pages > 1 %}
-{% set filters = (('&status=' ~ status_filter) if status_filter else '') ~ (('&camera_id=' ~ camera_filter) if camera_filter else '') %}
+{% set filters = (('&status=' ~ (status_filter | urlencode)) if status_filter else '') ~ (('&camera_id=' ~ (camera_filter | urlencode)) if camera_filter else '') %}
 <div class="pagination">
     {% if page > 1 %}
     <a href="/alerts?page={{ page - 1 }}{{ filters }}">Prev</a>

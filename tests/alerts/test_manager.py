@@ -87,8 +87,10 @@ class TestOnClipSaved:
 class TestDeleteAlert:
     """delete_alert should remove the DB row and the clip file."""
 
-    def test_delete_removes_alert_and_clip(self, manager: AlertManager, tmp_path: Path):
-        clip_file = tmp_path / "clip.mp4"
+    def test_delete_removes_alert_and_clip(self, manager: AlertManager, settings: Settings):
+        clip_dir = Path(settings.clip_dir)
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        clip_file = clip_dir / "clip.mp4"
         clip_file.write_bytes(b"fake video data")
 
         manager.on_clip_saved(confidence=0.92, clip_path=str(clip_file))
@@ -97,6 +99,19 @@ class TestDeleteAlert:
         assert manager.delete_alert(alert_id) is True
         assert manager.alert_count == 0
         assert not clip_file.exists()
+
+    def test_delete_refuses_paths_outside_clip_dir(
+        self, manager: AlertManager, tmp_path: Path
+    ):
+        """A tampered clip_path must never unlink files outside the clip dir."""
+        outside = tmp_path / "important.txt"
+        outside.write_text("do not delete")
+
+        manager.on_clip_saved(confidence=0.92, clip_path=str(outside))
+        alert_id = manager.get_alerts()[0]["id"]
+
+        assert manager.delete_alert(alert_id) is True  # row removed
+        assert outside.exists()  # file preserved
 
     def test_delete_with_missing_clip_still_removes_alert(self, manager: AlertManager):
         manager.on_clip_saved(confidence=0.92, clip_path="does/not/exist.mp4")
@@ -107,6 +122,40 @@ class TestDeleteAlert:
 
     def test_delete_nonexistent_returns_false(self, manager: AlertManager):
         assert manager.delete_alert(9999) is False
+
+
+class TestResilience:
+    """Review findings: storage failures and cooldown-orphaned clips."""
+
+    def test_storage_failure_still_notifies(self, manager: AlertManager):
+        from unittest.mock import MagicMock
+
+        notifier = MagicMock()
+        manager.add_notifier(notifier)
+        manager.storage.save_alert = MagicMock(side_effect=RuntimeError("db down"))
+
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4")
+
+        notifier.notify.assert_called_once()
+        alert, _ = notifier.notify.call_args.args
+        assert alert["id"] is None  # not persisted, but still delivered
+
+    def test_cooldown_suppression_removes_orphaned_clip(
+        self, manager: AlertManager, settings: Settings
+    ):
+        clip_dir = Path(settings.clip_dir)
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        first = clip_dir / "first.mp4"
+        second = clip_dir / "second.mp4"
+        first.write_bytes(b"a")
+        second.write_bytes(b"b")
+
+        manager.on_clip_saved(confidence=0.92, clip_path=str(first))
+        manager.on_clip_saved(confidence=0.95, clip_path=str(second))  # suppressed
+
+        assert manager.alert_count == 1
+        assert first.exists()       # belongs to the stored alert
+        assert not second.exists()  # suppressed alert's clip cleaned up
 
 
 class TestGetAlerts:

@@ -6,13 +6,20 @@ import hmac
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from src.config import Settings, get_settings
 
 TOKEN_COOKIE = "watchdog_token"
+
+
+def _token_matches(provided: str, token: str) -> bool:
+    """Constant-time token comparison that never raises on odd input."""
+    return hmac.compare_digest(
+        provided.encode("utf-8", "replace"), token.encode("utf-8", "replace")
+    )
 
 
 def _install_token_auth(app: FastAPI, token: str) -> None:
@@ -22,7 +29,9 @@ def _install_token_auth(app: FastAPI, token: str) -> None:
     query parameter (first browser visit), or the session cookie the
     middleware sets after a successful query-parameter login — the
     cookie is what lets the dashboard's MJPEG <img> tags and fetch()
-    calls authenticate without embedding the token in every URL.
+    calls authenticate without embedding the token in every URL. A
+    query-parameter login is answered with a redirect that strips the
+    token from the URL so it doesn't linger in history or logs.
     """
 
     @app.middleware("http")
@@ -33,11 +42,19 @@ def _install_token_auth(app: FastAPI, token: str) -> None:
             or request.cookies.get(TOKEN_COOKIE)
             or ""
         )
-        if not hmac.compare_digest(provided, token):
+        if not _token_matches(provided, token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        response = await call_next(request)
+
+        if request.method == "GET" and request.query_params.get("token") == token:
+            response = RedirectResponse(
+                request.url.remove_query_params("token"), status_code=303
+            )
+        else:
+            response = await call_next(request)
         if request.query_params.get("token") == token:
-            response.set_cookie(TOKEN_COOKIE, token, httponly=True)
+            response.set_cookie(
+                TOKEN_COOKIE, token, httponly=True, samesite="strict"
+            )
         return response
 
 

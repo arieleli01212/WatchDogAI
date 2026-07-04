@@ -45,16 +45,26 @@ class AlertManager:
         """Create an alert after a clip has been written to disk."""
         if self._is_in_cooldown(camera_id):
             logger.debug("Alert suppressed by cooldown: camera=%s", camera_id)
+            # Suppressed alerts must not leak orphaned clips onto disk
+            self._remove_clip_file(clip_path)
             return
 
         now = datetime.now(tz=timezone.utc)
-        alert_id = self.storage.save_alert(
-            timestamp=now.isoformat(),
-            confidence=confidence,
-            clip_path=clip_path,
-            camera_id=camera_id,
-            alert_type=alert_type,
-        )
+        # A database outage must not silence outbound alerting — the
+        # control center still gets notified, just without a stored id
+        alert_id = None
+        try:
+            alert_id = self.storage.save_alert(
+                timestamp=now.isoformat(),
+                confidence=confidence,
+                clip_path=clip_path,
+                camera_id=camera_id,
+                alert_type=alert_type,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist alert (camera=%s) — notifying anyway", camera_id
+            )
 
         self._last_alert_times[camera_id] = time.monotonic()
         logger.info(
@@ -86,12 +96,7 @@ class AlertManager:
         if alert is None:
             return False
 
-        # Remove the clip file if it exists
-        clip_file = Path(alert["clip_path"])
-        if clip_file.is_file():
-            clip_file.unlink()
-            logger.info("Deleted clip file: %s", clip_file)
-
+        self._remove_clip_file(alert["clip_path"])
         self.storage.delete_alert(alert_id)
         logger.info("Deleted alert id=%s", alert_id)
         return True
@@ -142,3 +147,25 @@ class AlertManager:
             return False
         elapsed = time.monotonic() - last
         return elapsed < self._settings.cooldown_seconds
+
+    def _remove_clip_file(self, clip_path: str) -> None:
+        """Delete a clip, but only inside the configured clip directory.
+
+        clip_path comes from the database, so a tampered row must never
+        be able to unlink arbitrary files. Deletion failures (e.g. the
+        notifier still streaming the file on Windows) are logged, not
+        raised — the alert row is removed either way.
+        """
+        base = Path(self._settings.clip_dir).resolve()
+        try:
+            target = Path(clip_path).resolve()
+            if not target.is_relative_to(base):
+                logger.warning(
+                    "Refusing to delete clip outside %s: %s", base, clip_path
+                )
+                return
+            if target.is_file():
+                target.unlink()
+                logger.info("Deleted clip file: %s", target)
+        except OSError:
+            logger.warning("Could not delete clip file %s", clip_path, exc_info=True)

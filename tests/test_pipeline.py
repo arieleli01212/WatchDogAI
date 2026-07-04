@@ -173,6 +173,15 @@ class TestAnalysisLoop:
         pipeline._detector.predict_frame.assert_not_called()
         recorder.on_detection.assert_not_called()
 
+    def test_recorder_ticks_while_frames_stalled(self, make_pipeline):
+        """A stalled camera must still let an overdue recording finalize."""
+        pipeline, camera, recorder, stop_event = make_pipeline()
+        camera.get_latest_frame_with_seq.return_value = (None, 0)
+
+        _run_analysis(pipeline, stop_event, duration=0.15)
+
+        assert recorder.tick.called
+
 
 class TestObjectTracking:
     """People/vehicle tracking runs inside the analysis loop."""

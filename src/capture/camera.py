@@ -72,6 +72,10 @@ class Camera:
         self._target_fps = target_fps
         self._released = False
         self._lock = threading.Lock()
+        # Guards the native VideoCapture across threads: the capture
+        # thread reopens it on reconnect while the dashboard/telemetry
+        # threads poll isOpened() and the main thread releases it
+        self._cap_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
         self._seq = 0
         self._last_frame_time: Optional[float] = None
@@ -165,9 +169,23 @@ class Camera:
             "Camera %s: %d consecutive read failures, reopening source in %.1fs",
             self.id, self._consecutive_failures, delay,
         )
-        time.sleep(delay)
-        self._cap.release()
-        self._cap = self._open()
+        self._sleep_interruptible(delay)
+        if self._released:
+            return  # shutdown happened during the backoff — do not reopen
+        with self._cap_lock:
+            if self._released:
+                return
+            self._cap.release()
+            self._cap = self._open()
+
+    def _sleep_interruptible(self, delay: float) -> None:
+        """Sleep up to *delay* seconds, waking early once released."""
+        deadline = time.monotonic() + delay
+        while not self._released:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.25, remaining))
 
     def add_frame(self, frame: np.ndarray) -> None:
         """Publish a captured frame as the latest frame."""
@@ -211,12 +229,18 @@ class Camera:
         """Return True if the capture device is open and not yet released."""
         if self._released:
             return False
-        return self._cap.isOpened()
+        with self._cap_lock:
+            if self._released:
+                return False
+            return self._cap.isOpened()
 
     def release(self) -> None:
         """Release the underlying capture device."""
-        self._cap.release()
+        # Flag first so the capture thread stops using the handle and
+        # any pending reconnect backoff wakes up and aborts
         self._released = True
+        with self._cap_lock:
+            self._cap.release()
 
     # -- Properties -----------------------------------------------------------
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -29,8 +30,20 @@ class ClipRecorder:
     """Sits between the capture loop and alert manager for one camera.
 
     Keeps a rolling pre-event buffer and records full clips when an
-    event is confirmed.  Thread-safe: ``add_frame`` is called from the
-    capture thread and ``on_detection`` from the analysis thread.
+    event is confirmed. Thread-safe: ``add_frame`` is called from the
+    capture thread, ``on_detection``/``tick`` from the analysis thread,
+    and clips are encoded on short-lived writer threads.
+
+    Robustness properties:
+
+    - Recording length is capped (``max_clip_seconds``) so a sustained
+      event chunks into multiple clips instead of growing in memory.
+    - ``tick()`` finalizes an overdue recording even when the camera
+      stops delivering frames (e.g. it was disabled right after the
+      incident), so captured footage is never stranded in RECORDING.
+    - While a clip is being written (SAVING) the pre-event buffer keeps
+      filling and a newly confirmed event starts a fresh recording
+      immediately — back-to-back events are not lost.
     """
 
     def __init__(
@@ -44,10 +57,13 @@ class ClipRecorder:
         self._alert_manager = alert_manager
         self._fps = max(fps, 1.0)
         self._camera_id = camera_id
+        # camera_id appears in filenames; strip anything path-hostile
+        self._safe_camera_id = re.sub(r"[^A-Za-z0-9_-]+", "_", camera_id) or "camera"
 
         pre_frames = int(self._fps * settings.pre_event_seconds)
         self._pre_buffer: deque[np.ndarray] = deque(maxlen=max(pre_frames, 1))
         self._rec_frames: list[np.ndarray] = []
+        self._max_rec_frames = max(int(self._fps * settings.max_clip_seconds), 1)
 
         self._clip_dir = Path(settings.clip_dir)
         self._clip_dir.mkdir(parents=True, exist_ok=True)
@@ -66,12 +82,13 @@ class ClipRecorder:
     def add_frame(self, frame: np.ndarray) -> None:
         """Feed a frame at full capture FPS."""
         with self._lock:
-            if self._state is _State.IDLE:
-                self._pre_buffer.append(frame)
-            elif self._state is _State.RECORDING:
+            if self._state is _State.RECORDING:
                 self._rec_frames.append(frame)
-                if self._post_deadline is not None and time.monotonic() >= self._post_deadline:
-                    self._transition_to_saving()
+                self._check_recording_limits()
+            else:
+                # IDLE and SAVING both keep the pre-event context warm so
+                # a follow-up event still gets its lead-in footage
+                self._pre_buffer.append(frame)
 
     def on_detection(
         self,
@@ -81,26 +98,50 @@ class ClipRecorder:
     ) -> None:
         """Signal the current detection result from the analysis loop."""
         with self._lock:
-            if self._state is _State.IDLE and is_event:
-                self._start_recording(confidence, alert_type)
-            elif self._state is _State.RECORDING:
+            if self._state is _State.RECORDING:
                 if is_event:
                     # Event continues — keep recording, reset post-deadline
                     self._post_deadline = None
                     self._rec_confidence = max(self._rec_confidence, confidence)
+                    # Violence outranks behavior events in the recorded type
+                    if alert_type == "violence":
+                        self._rec_alert_type = "violence"
                 else:
                     # Event ended — start post-event countdown
                     if self._post_deadline is None:
                         self._post_deadline = (
                             time.monotonic() + self._settings.post_event_seconds
                         )
+                    self._check_recording_limits()
+            elif is_event:
+                # IDLE or SAVING: an in-flight write does not block a new
+                # event (the writer thread owns its own frame snapshot)
+                self._start_recording(confidence, alert_type)
+
+    def tick(self) -> None:
+        """Finalize an overdue recording even when no frames arrive."""
+        with self._lock:
+            if self._state is _State.RECORDING:
+                self._check_recording_limits()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _check_recording_limits(self) -> None:
+        """Transition to SAVING when overdue or too long. Must hold the lock."""
+        if self._post_deadline is not None and time.monotonic() >= self._post_deadline:
+            self._transition_to_saving()
+            return
+        if len(self._rec_frames) >= self._max_rec_frames:
+            logger.warning(
+                "ClipRecorder[%s]: max clip length (%ss) reached, chunking",
+                self._camera_id, self._settings.max_clip_seconds,
+            )
+            self._transition_to_saving()
+
     def _start_recording(self, confidence: float, alert_type: str) -> None:
-        """Transition from IDLE → RECORDING.  Must be called under lock."""
+        """Transition to RECORDING.  Must be called under lock."""
         logger.info(
             "ClipRecorder[%s]: %s detected, starting recording",
             self._camera_id, alert_type,
@@ -138,18 +179,20 @@ class ClipRecorder:
         alert_type: str,
     ) -> None:
         """Write frames to MP4 and create an alert.  Runs in its own thread."""
-        if not frames:
-            with self._lock:
-                self._state = _State.IDLE
-            return
-
-        now = datetime.now(tz=timezone.utc)
-        date_dir = self._clip_dir / now.strftime("%Y-%m-%d")
-        date_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{now.strftime('%H-%M-%S')}_{self._camera_id}.mp4"
-        clip_path = date_dir / filename
-
         try:
+            if not frames:
+                return
+
+            now = datetime.now(tz=timezone.utc)
+            date_dir = self._clip_dir / now.strftime("%Y-%m-%d")
+            date_dir.mkdir(parents=True, exist_ok=True)
+            # Millisecond suffix keeps chunked back-to-back clips distinct
+            filename = (
+                f"{now.strftime('%H-%M-%S')}-{now.microsecond // 1000:03d}"
+                f"_{self._safe_camera_id}.mp4"
+            )
+            clip_path = date_dir / filename
+
             if not self._encode_clip(frames, clip_path):
                 logger.error(
                     "ClipRecorder[%s]: failed to write clip %s — alert skipped",
@@ -170,7 +213,10 @@ class ClipRecorder:
             )
         finally:
             with self._lock:
-                self._state = _State.IDLE
+                # A new event may have re-entered RECORDING while we wrote;
+                # only clear the state if no one else claimed it
+                if self._state is _State.SAVING:
+                    self._state = _State.IDLE
 
     def _encode_clip(self, frames: list[np.ndarray], clip_path: Path) -> bool:
         """Encode frames to MP4. Returns False when the writer produced nothing usable."""

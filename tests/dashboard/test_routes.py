@@ -192,6 +192,37 @@ async def test_api_alerts_with_alert_manager(app, client, tmp_path):
 
 
 @pytest.mark.anyio
+async def test_api_alerts_oversized_offset_rejected(client):
+    async with client as ac:
+        resp = await ac.get("/api/alerts?offset=99999999999999999999")
+    assert resp.status_code == 422  # bounded, not a 500 from the DB layer
+
+
+@pytest.mark.anyio
+async def test_alerts_page_builds_clip_urls(app, client, tmp_path):
+    """Clip URLs must be derived from the configured clip dir, not a hardcoded prefix."""
+    clip_dir = tmp_path / "clips"
+    (clip_dir / "2026-07-04").mkdir(parents=True, exist_ok=True)
+    clip = clip_dir / "2026-07-04" / "10-00-00-000_cam0.mp4"
+    clip.write_bytes(b"vid")
+
+    manager_settings = Settings(
+        db_backend="sqlite",
+        db_path=str(tmp_path / "alerts2.db"),
+        cooldown_seconds=0,
+    )
+    manager = AlertManager(manager_settings)
+    manager.on_clip_saved(confidence=0.9, clip_path=str(clip), camera_id="cam0")
+    app.state.alert_manager = manager
+
+    async with client as ac:
+        resp = await ac.get("/alerts")
+    assert resp.status_code == 200
+    assert "/clips/2026-07-04/10-00-00-000_cam0.mp4" in resp.text
+    manager.storage.close()
+
+
+@pytest.mark.anyio
 async def test_api_delete_alert(app, client, tmp_path):
     settings = Settings(
         db_backend="sqlite",
@@ -252,15 +283,25 @@ async def test_wrong_token_rejected(secured_app):
 
 
 @pytest.mark.anyio
-async def test_query_token_sets_session_cookie(secured_app):
+async def test_query_token_sets_cookie_and_strips_token(secured_app):
     transport = ASGITransport(app=secured_app)
     async with AsyncClient(transport=transport, base_url="http://t") as ac:
+        # Login redirect drops the token from the URL and sets the cookie
         resp = await ac.get("/?token=s3cret")
-        assert resp.status_code == 200
+        assert resp.status_code == 303
+        assert "token" not in resp.headers["location"]
         assert resp.cookies.get("watchdog_token") == "s3cret"
-        # Subsequent request authenticates via the cookie alone
+        # Subsequent requests authenticate via the cookie alone
         resp = await ac.get("/api/status")
         assert resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_non_ascii_token_rejected_not_500(secured_app):
+    transport = ASGITransport(app=secured_app)
+    async with AsyncClient(transport=transport, base_url="http://t") as ac:
+        resp = await ac.get("/api/status", params={"token": "טוקן"})
+    assert resp.status_code == 401
 
 
 @pytest.mark.anyio
