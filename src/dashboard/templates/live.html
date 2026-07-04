@@ -4,59 +4,103 @@
 
 {% block extra_head %}
 <style>
-    .live-wrapper {
+    .camera-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+        gap: 1.25rem;
+    }
+
+    .camera-card {
+        background: #161822;
+        border: 1px solid #2a2d3a;
+        border-radius: 0.5rem;
+        overflow: hidden;
         display: flex;
         flex-direction: column;
-        align-items: center;
-        gap: 1rem;
     }
+
+    .camera-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.6rem 1rem;
+        border-bottom: 1px solid #2a2d3a;
+    }
+
+    .camera-header .cam-name { font-weight: 600; }
+    .camera-header .cam-health {
+        margin-left: auto;
+        font-size: 0.8rem;
+        color: #9ca3af;
+    }
+
+    .health-dot {
+        display: inline-block;
+        width: 0.6rem;
+        height: 0.6rem;
+        border-radius: 9999px;
+        margin-right: 0.35rem;
+        background: #6b7280;
+    }
+    .health-dot.ok      { background: #34d399; }
+    .health-dot.offline { background: #f87171; }
 
     .feed-container {
         position: relative;
-        max-width: 100%;
-        border: 2px solid #2a2d3a;
-        border-radius: 0.5rem;
-        overflow: hidden;
         background: #000;
+        aspect-ratio: 16 / 10;
     }
 
     .feed-container img {
         display: block;
-        max-width: 100%;
-        height: auto;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
     }
 
     .status-bar {
         display: flex;
         align-items: center;
         gap: 1rem;
-        padding: 0.75rem 1.25rem;
-        border-radius: 0.5rem;
-        width: 100%;
-        max-width: 720px;
+        padding: 0.6rem 1rem;
     }
 
     .status-normal   { background: #065f46; }
-    .status-violence  { background: #7f1d1d; }
+    .status-violence { background: #7f1d1d; }
+    .status-offline  { background: #374151; }
 
-    .status-bar .label { font-weight: 700; font-size: 1rem; }
-    .status-bar .confidence { margin-left: auto; font-variant-numeric: tabular-nums; }
+    .status-bar .label { font-weight: 700; font-size: 0.95rem; }
+    .status-bar .confidence { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 0.9rem; }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="live-wrapper">
-    <h1 style="margin-bottom:0.5rem;">Live Camera Feed</h1>
+<h1 style="margin-bottom:1rem;">Live Cameras</h1>
 
-    <div id="status-bar" class="status-bar status-normal">
-        <span class="label" id="det-label">NORMAL</span>
-        <span class="confidence" id="det-confidence">Violence: 0.0 %</span>
+{% if cameras %}
+<div class="camera-grid">
+    {% for cam_id, cam in cameras.items() %}
+    <div class="camera-card" id="card-{{ cam_id }}">
+        <div class="camera-header">
+            <span class="cam-name">{{ cam.name }}</span>
+            <span class="cam-health">
+                <span class="health-dot" id="health-{{ cam_id }}"></span>
+                <span id="health-text-{{ cam_id }}">…</span>
+            </span>
+        </div>
+        <div class="feed-container">
+            <img src="/video_feed/{{ cam_id }}" alt="Live feed: {{ cam.name }}">
+        </div>
+        <div id="status-{{ cam_id }}" class="status-bar status-normal">
+            <span class="label" id="label-{{ cam_id }}">NORMAL</span>
+            <span class="confidence" id="conf-{{ cam_id }}">Violence: 0.0 %</span>
+        </div>
     </div>
-
-    <div class="feed-container">
-        <img src="/video_feed" alt="Live camera feed">
-    </div>
+    {% endfor %}
 </div>
+{% else %}
+<p style="color:#6b7280;">No cameras configured. Set the <code>CAMERAS</code> environment variable.</p>
+{% endif %}
 {% endblock %}
 
 {% block extra_scripts %}
@@ -66,19 +110,32 @@
         try {
             const resp = await fetch("/api/status");
             const data = await resp.json();
-            const det = data.detection;
 
-            const bar = document.getElementById("status-bar");
-            const labelEl = document.getElementById("det-label");
-            const confEl = document.getElementById("det-confidence");
+            for (const [camId, cam] of Object.entries(data.cameras)) {
+                const bar = document.getElementById("status-" + camId);
+                const labelEl = document.getElementById("label-" + camId);
+                const confEl = document.getElementById("conf-" + camId);
+                const healthDot = document.getElementById("health-" + camId);
+                const healthText = document.getElementById("health-text-" + camId);
+                if (!bar) continue;
 
-            labelEl.textContent = det.label.toUpperCase();
-            confEl.textContent = "Violence: " + (det.violence_score * 100).toFixed(1) + " %";
+                healthDot.className = "health-dot " + (cam.healthy ? "ok" : "offline");
+                healthText.textContent = cam.healthy ? "online" : "no signal";
 
-            if (det.label === "violence") {
-                bar.className = "status-bar status-violence";
-            } else {
-                bar.className = "status-bar status-normal";
+                const det = cam.detection || {};
+                const score = det.violence_score || 0;
+                confEl.textContent = "Violence: " + (score * 100).toFixed(1) + " %";
+
+                if (!cam.healthy) {
+                    bar.className = "status-bar status-offline";
+                    labelEl.textContent = "OFFLINE";
+                } else if (det.label === "violence") {
+                    bar.className = "status-bar status-violence";
+                    labelEl.textContent = "VIOLENCE";
+                } else {
+                    bar.className = "status-bar status-normal";
+                    labelEl.textContent = "NORMAL";
+                }
             }
         } catch (_) { /* ignore transient errors */ }
     }

@@ -46,10 +46,22 @@ class TestOnClipSaved:
         assert alerts[0]["camera_id"] == "cam0"
         assert alerts[0]["status"] == "new"
 
+    def test_alert_type_persisted(self, manager: AlertManager):
+        manager.on_clip_saved(
+            confidence=0.7, clip_path="clips/l.mp4",
+            camera_id="cam0", alert_type="abnormal_behavior",
+        )
+        assert manager.get_alerts()[0]["alert_type"] == "abnormal_behavior"
+
     def test_cooldown_prevents_duplicate_alerts(self, manager: AlertManager):
         manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4")
         manager.on_clip_saved(confidence=0.95, clip_path="clips/b.mp4")
         assert manager.alert_count == 1
+
+    def test_cooldown_is_per_camera(self, manager: AlertManager):
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4", camera_id="cam0")
+        manager.on_clip_saved(confidence=0.95, clip_path="clips/b.mp4", camera_id="cam1")
+        assert manager.alert_count == 2
 
     def test_zero_cooldown_allows_consecutive_alerts(self, tmp_path: Path):
         settings = Settings(
@@ -96,7 +108,7 @@ class TestDeleteAlert:
 
 
 class TestGetAlerts:
-    """get_alerts should delegate to storage with pagination."""
+    """get_alerts should delegate to storage with pagination and filters."""
 
     def test_get_alerts_pagination(self, tmp_path: Path):
         settings = Settings(
@@ -110,3 +122,60 @@ class TestGetAlerts:
         assert len(mgr.get_alerts(limit=2)) == 2
         assert len(mgr.get_alerts(limit=10, offset=4)) == 1
         mgr.storage.close()
+
+    def test_get_alerts_camera_filter(self, tmp_path: Path):
+        settings = Settings(
+            db_path=str(tmp_path / "test4.db"),
+            cooldown_seconds=0,
+        )
+        mgr = AlertManager(settings)
+        mgr.on_clip_saved(confidence=0.9, clip_path="a.mp4", camera_id="cam0")
+        mgr.on_clip_saved(confidence=0.9, clip_path="b.mp4", camera_id="cam1")
+
+        cam1_alerts = mgr.get_alerts(camera_id="cam1")
+        assert len(cam1_alerts) == 1
+        assert cam1_alerts[0]["camera_id"] == "cam1"
+        assert mgr.get_alert_count(camera_id="cam0") == 1
+        mgr.storage.close()
+
+
+class TestNotifiers:
+    """Registered notifiers should receive every created alert."""
+
+    def test_notifier_called_with_alert(self, manager: AlertManager):
+        from unittest.mock import MagicMock
+
+        notifier = MagicMock()
+        manager.add_notifier(notifier)
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4", camera_id="cam0")
+
+        notifier.notify.assert_called_once()
+        alert, clip_path = notifier.notify.call_args.args
+        assert alert["camera_id"] == "cam0"
+        assert alert["alert_type"] == "violence"
+        assert alert["confidence"] == 0.92
+        assert clip_path == "clips/a.mp4"
+
+    def test_failing_notifier_does_not_break_alerting(self, manager: AlertManager):
+        from unittest.mock import MagicMock
+
+        bad = MagicMock()
+        bad.notify.side_effect = RuntimeError("boom")
+        good = MagicMock()
+        manager.add_notifier(bad)
+        manager.add_notifier(good)
+
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4")
+
+        assert manager.alert_count == 1
+        good.notify.assert_called_once()
+
+    def test_notifier_not_called_during_cooldown(self, manager: AlertManager):
+        from unittest.mock import MagicMock
+
+        notifier = MagicMock()
+        manager.add_notifier(notifier)
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4")
+        manager.on_clip_saved(confidence=0.95, clip_path="clips/b.mp4")
+
+        assert notifier.notify.call_count == 1

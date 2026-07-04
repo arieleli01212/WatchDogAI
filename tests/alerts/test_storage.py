@@ -43,7 +43,54 @@ class TestAlertStorage:
         assert "confidence" in columns
         assert "clip_path" in columns
         assert "camera_id" in columns
+        assert "alert_type" in columns
         assert "status" in columns
+
+    def test_migrates_old_schema_without_alert_type(self, tmp_path: Path):
+        """Databases created before alert types existed gain the column."""
+        old_db = str(tmp_path / "old.db")
+        conn = sqlite3.connect(old_db)
+        conn.execute(
+            """CREATE TABLE alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                clip_path TEXT NOT NULL,
+                camera_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'new'
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO alerts (timestamp, confidence, clip_path, camera_id) "
+            "VALUES ('2025-01-15T10:30:00', 0.9, 'clip.mp4', 'cam0')"
+        )
+        conn.commit()
+        conn.close()
+
+        storage = AlertStorage(old_db)
+        alerts = storage.get_alerts()
+        assert alerts[0]["alert_type"] == "violence"
+        storage.close()
+
+    def test_alert_type_defaults_to_violence(self, storage: AlertStorage):
+        storage.save_alert("2025-01-15T10:30:00", 0.92, "clip1.mp4", "cam0")
+        assert storage.get_alerts()[0]["alert_type"] == "violence"
+
+    def test_alert_type_persisted(self, storage: AlertStorage):
+        storage.save_alert(
+            "2025-01-15T10:30:00", 0.7, "clip1.mp4", "cam0",
+            alert_type="abnormal_behavior",
+        )
+        assert storage.get_alerts()[0]["alert_type"] == "abnormal_behavior"
+
+    def test_get_alerts_camera_filter(self, storage: AlertStorage):
+        storage.save_alert("2025-01-15T10:30:00", 0.92, "clip1.mp4", "cam0")
+        storage.save_alert("2025-01-15T10:31:00", 0.88, "clip2.mp4", "cam1")
+
+        cam0 = storage.get_alerts(camera_id="cam0")
+        assert len(cam0) == 1
+        assert cam0[0]["camera_id"] == "cam0"
+        assert storage.get_alert_count(camera_id="cam1") == 1
 
     def test_save_alert_returns_id(self, storage: AlertStorage):
         alert_id = storage.save_alert(

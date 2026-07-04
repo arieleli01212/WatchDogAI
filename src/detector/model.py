@@ -10,6 +10,7 @@ Label mapping: class 0 = normal, class 1 = violence.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 import cv2
@@ -48,6 +49,8 @@ class ViolenceDetector:
         self._model_path = model_path
         self._device = self._resolve_device(device)
         self._model_name = "vit-violence-detection"
+        # One model instance is shared by all camera pipelines
+        self._infer_lock = threading.Lock()
 
         logger.info("Loading model %s on %s...", model_path, self._device)
         self._model, self._processor = self._load_model(model_path)
@@ -113,7 +116,7 @@ class ViolenceDetector:
             inputs = self._processor(images=image, return_tensors="pt")
             tensor = inputs["pixel_values"].to(self._device)
 
-            with torch.no_grad():
+            with self._infer_lock, torch.no_grad():
                 logits = self._model(tensor)
                 probs = torch.softmax(logits, dim=1)
 

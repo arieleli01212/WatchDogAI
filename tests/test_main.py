@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import logging
-import threading
-import time
 from unittest.mock import MagicMock, patch
 
-import numpy as np
-
-from src.config import Settings
-from main import setup_logging, detection_loop
+from src.config import CameraConfig, Settings
+from main import setup_logging
 
 
 class TestSetupLogging:
@@ -72,178 +68,87 @@ class TestSetupLogging:
             root.handlers = original_handlers
 
 
-class TestMainComponentsInitialize:
-    """Verify main() initializes all components with correct settings."""
+class TestMain:
+    """Verify main() builds one pipeline per camera and wires shared components."""
 
     @patch("main.uvicorn")
     @patch("main.create_app")
-    @patch("main.ClipRecorder")
+    @patch("main.CameraPipeline")
     @patch("main.AlertManager")
     @patch("main.ViolenceDetector")
-    @patch("main.Camera")
     @patch("main.setup_logging")
     @patch("main.get_settings")
-    def test_main_components_initialize(
+    def test_main_builds_pipeline_per_camera(
         self,
         mock_get_settings,
         mock_setup_logging,
-        mock_camera_cls,
         mock_detector_cls,
         mock_alert_manager_cls,
-        mock_clip_recorder_cls,
+        mock_pipeline_cls,
         mock_create_app,
         mock_uvicorn,
     ):
-        """main() should create Camera, ViolenceDetector, AlertManager, ClipRecorder."""
         settings = Settings(
-            camera_source=0,
-            clip_length=90,
+            cameras=(
+                CameraConfig(id="cam-north", source=0),
+                CameraConfig(id="cam-south", source=1),
+            ),
             dashboard_port=8000,
         )
         mock_get_settings.return_value = settings
         mock_setup_logging.return_value = MagicMock()
-
-        # Keep the worker threads harmless: no frames, no video source
-        camera = mock_camera_cls.return_value
-        camera.read_frame.return_value = (False, None)
-        camera.get_latest_frame.return_value = None
-        camera.fps = 30.0
-        camera._source = 0
-
         mock_create_app.return_value = MagicMock()
         mock_uvicorn.run = MagicMock()  # returns immediately -> main() shuts down
 
         from main import main
         main()
 
-        mock_camera_cls.assert_called_once_with(
-            source=settings.camera_source,
-            clip_length=settings.clip_length,
-        )
+        # One pipeline per configured camera, all started and cleaned up
+        assert mock_pipeline_cls.call_count == 2
+        camera_ids = [
+            call.kwargs["config"].id for call in mock_pipeline_cls.call_args_list
+        ]
+        assert camera_ids == ["cam-north", "cam-south"]
+
+        pipeline = mock_pipeline_cls.return_value
+        assert pipeline.start.call_count == 2
+        assert pipeline.join.call_count == 2
+        assert pipeline.release.call_count == 2
+
+        # Shared components created once
         mock_detector_cls.assert_called_once()
         mock_alert_manager_cls.assert_called_once_with(settings)
-        mock_clip_recorder_cls.assert_called_once()
-        mock_create_app.assert_called_once()
+        mock_create_app.assert_called_once_with(settings)
         mock_uvicorn.run.assert_called_once()
-        camera.release.assert_called_once()
 
+    @patch("main.uvicorn")
+    @patch("main.create_app")
+    @patch("main.CameraPipeline")
+    @patch("main.AlertManager")
+    @patch("main.ViolenceDetector")
+    @patch("main.setup_logging")
+    @patch("main.get_settings")
+    def test_main_registers_cameras_on_app_state(
+        self,
+        mock_get_settings,
+        mock_setup_logging,
+        mock_detector_cls,
+        mock_alert_manager_cls,
+        mock_pipeline_cls,
+        mock_create_app,
+        mock_uvicorn,
+    ):
+        settings = Settings(cameras=(CameraConfig(id="cam0", source=0),))
+        mock_get_settings.return_value = settings
+        mock_setup_logging.return_value = MagicMock()
 
-def _run_detection_loop(camera, detector, clip_recorder, settings, duration=0.4):
-    """Run detection_loop in a thread for a short period, then stop it."""
-    stop_event = threading.Event()
-    thread = threading.Thread(
-        target=detection_loop,
-        args=(camera, detector, clip_recorder, settings, MagicMock(), stop_event),
-        daemon=True,
-    )
-    thread.start()
-    time.sleep(duration)
-    stop_event.set()
-    thread.join(timeout=3)
-    return thread
+        app = MagicMock()
+        app.state.cameras = {}
+        mock_create_app.return_value = app
+        mock_uvicorn.run = MagicMock()
 
+        from main import main
+        main()
 
-class TestDetectionLoop:
-    """detection_loop should classify frames and signal the clip recorder."""
-
-    def test_confirmed_violence_after_consecutive_hits(self):
-        """After N consecutive high-confidence detections, on_detection(True) fires."""
-        fake_frame = np.zeros((224, 224, 3), dtype=np.uint8)
-        camera = MagicMock()
-        camera.get_latest_frame.return_value = fake_frame
-
-        detector = MagicMock()
-        detector.predict_frame.return_value = ("violence", 0.95)
-
-        clip_recorder = MagicMock()
-        settings = Settings(confidence_threshold=0.85, consecutive_hits=3)
-
-        _run_detection_loop(camera, detector, clip_recorder, settings)
-
-        assert detector.predict_frame.call_count >= 3
-        confirmed = [c.args[0] for c in clip_recorder.on_detection.call_args_list]
-        # First two iterations are unconfirmed, then the streak confirms
-        assert confirmed[:2] == [False, False]
-        assert True in confirmed
-
-    def test_normal_frames_never_confirm(self):
-        """Normal predictions should never signal confirmed violence."""
-        fake_frame = np.zeros((224, 224, 3), dtype=np.uint8)
-        camera = MagicMock()
-        camera.get_latest_frame.return_value = fake_frame
-
-        detector = MagicMock()
-        detector.predict_frame.return_value = ("normal", 0.98)
-
-        clip_recorder = MagicMock()
-        settings = Settings(confidence_threshold=0.85, consecutive_hits=3)
-
-        _run_detection_loop(camera, detector, clip_recorder, settings)
-
-        assert clip_recorder.on_detection.called
-        confirmed = [c.args[0] for c in clip_recorder.on_detection.call_args_list]
-        assert True not in confirmed
-
-    def test_low_confidence_violence_never_confirms(self):
-        """Violence below the confidence threshold should not build a streak."""
-        fake_frame = np.zeros((224, 224, 3), dtype=np.uint8)
-        camera = MagicMock()
-        camera.get_latest_frame.return_value = fake_frame
-
-        detector = MagicMock()
-        detector.predict_frame.return_value = ("violence", 0.50)
-
-        clip_recorder = MagicMock()
-        settings = Settings(confidence_threshold=0.85, consecutive_hits=3)
-
-        _run_detection_loop(camera, detector, clip_recorder, settings)
-
-        confirmed = [c.args[0] for c in clip_recorder.on_detection.call_args_list]
-        assert True not in confirmed
-
-    def test_no_frames_skips_inference(self):
-        """If the camera has no frames yet, predict_frame is never called."""
-        camera = MagicMock()
-        camera.get_latest_frame.return_value = None
-
-        detector = MagicMock()
-        clip_recorder = MagicMock()
-        settings = Settings()
-
-        _run_detection_loop(camera, detector, clip_recorder, settings, duration=0.2)
-
-        detector.predict_frame.assert_not_called()
-        clip_recorder.on_detection.assert_not_called()
-
-    def test_detection_loop_updates_app_state(self):
-        """When _app_state is set, detector_status should be updated."""
-        fake_frame = np.zeros((224, 224, 3), dtype=np.uint8)
-        camera = MagicMock()
-        camera.get_latest_frame.return_value = fake_frame
-
-        detector = MagicMock()
-        detector.predict_frame.return_value = ("violence", 0.92)
-
-        clip_recorder = MagicMock()
-        settings = Settings(confidence_threshold=0.85, consecutive_hits=3)
-
-        app_state = MagicMock()
-        detection_loop._app_state = app_state
-        try:
-            _run_detection_loop(camera, detector, clip_recorder, settings)
-            status = app_state.detector_status
-            assert status["label"] in ("violence", "normal")
-            assert "violence_score" in status
-            assert "streak" in status
-        finally:
-            detection_loop._app_state = None
-
-    def test_detection_loop_stops_on_event(self):
-        """Setting the stop_event should cause the loop to exit."""
-        camera = MagicMock()
-        camera.get_latest_frame.return_value = None
-
-        thread = _run_detection_loop(
-            camera, MagicMock(), MagicMock(), Settings(), duration=0.2
-        )
-        assert not thread.is_alive()
+        assert "cam0" in app.state.cameras
+        assert app.state.alert_manager is mock_alert_manager_cls.return_value

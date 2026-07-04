@@ -5,15 +5,27 @@
 {% block content %}
 <h1 style="margin-bottom:0.25rem;">Alerts</h1>
 
-<form method="get" action="/alerts" style="margin-bottom:0.5rem;">
-    <label for="status" style="font-size:0.85rem;color:#9ca3af;">Filter by status:</label>
-    <select name="status" id="status" onchange="this.form.submit()"
-            style="background:#1e2030;color:#d1d5db;border:1px solid #2a2d3a;padding:0.3rem 0.5rem;border-radius:0.25rem;">
-        <option value="">All</option>
-        <option value="new"{% if status_filter == "new" %} selected{% endif %}>New</option>
-        <option value="reviewed"{% if status_filter == "reviewed" %} selected{% endif %}>Reviewed</option>
-        <option value="dismissed"{% if status_filter == "dismissed" %} selected{% endif %}>Dismissed</option>
-    </select>
+<form method="get" action="/alerts" style="margin-bottom:0.5rem;display:flex;gap:1rem;align-items:center;">
+    <span>
+        <label for="status" style="font-size:0.85rem;color:#9ca3af;">Status:</label>
+        <select name="status" id="status" onchange="this.form.submit()"
+                style="background:#1e2030;color:#d1d5db;border:1px solid #2a2d3a;padding:0.3rem 0.5rem;border-radius:0.25rem;">
+            <option value="">All</option>
+            <option value="new"{% if status_filter == "new" %} selected{% endif %}>New</option>
+            <option value="reviewed"{% if status_filter == "reviewed" %} selected{% endif %}>Reviewed</option>
+            <option value="dismissed"{% if status_filter == "dismissed" %} selected{% endif %}>Dismissed</option>
+        </select>
+    </span>
+    <span>
+        <label for="camera_id" style="font-size:0.85rem;color:#9ca3af;">Camera:</label>
+        <select name="camera_id" id="camera_id" onchange="this.form.submit()"
+                style="background:#1e2030;color:#d1d5db;border:1px solid #2a2d3a;padding:0.3rem 0.5rem;border-radius:0.25rem;">
+            <option value="">All</option>
+            {% for cam_id in camera_ids %}
+            <option value="{{ cam_id }}"{% if camera_filter == cam_id %} selected{% endif %}>{{ cam_id }}</option>
+            {% endfor %}
+        </select>
+    </span>
 </form>
 
 <table>
@@ -21,6 +33,7 @@
         <tr>
             <th>Time</th>
             <th>Camera</th>
+            <th>Type</th>
             <th>Confidence</th>
             <th>Status</th>
             <th>Clip</th>
@@ -32,6 +45,7 @@
         <tr id="alert-{{ alert.id }}">
             <td>{{ alert.timestamp }}</td>
             <td>{{ alert.camera_id }}</td>
+            <td>{{ alert.alert_type | default('violence') }}</td>
             <td>{{ "%.1f"|format(alert.confidence * 100) }} %</td>
             <td><span class="badge {% if alert.status == 'new' %}badge-violence{% else %}badge-normal{% endif %}">{{ alert.status }}</span></td>
             <td>
@@ -47,27 +61,28 @@
             </td>
         </tr>
         {% else %}
-        <tr><td colspan="6" style="text-align:center;color:#6b7280;">No alerts found.</td></tr>
+        <tr><td colspan="7" style="text-align:center;color:#6b7280;">No alerts found.</td></tr>
         {% endfor %}
     </tbody>
 </table>
 
 {% if total_pages > 1 %}
+{% set filters = (('&status=' ~ status_filter) if status_filter else '') ~ (('&camera_id=' ~ camera_filter) if camera_filter else '') %}
 <div class="pagination">
     {% if page > 1 %}
-    <a href="/alerts?page={{ page - 1 }}{% if status_filter %}&status={{ status_filter }}{% endif %}">Prev</a>
+    <a href="/alerts?page={{ page - 1 }}{{ filters }}">Prev</a>
     {% endif %}
 
     {% for p in range(1, total_pages + 1) %}
         {% if p == page %}
         <span class="current">{{ p }}</span>
         {% else %}
-        <a href="/alerts?page={{ p }}{% if status_filter %}&status={{ status_filter }}{% endif %}">{{ p }}</a>
+        <a href="/alerts?page={{ p }}{{ filters }}">{{ p }}</a>
         {% endif %}
     {% endfor %}
 
     {% if page < total_pages %}
-    <a href="/alerts?page={{ page + 1 }}{% if status_filter %}&status={{ status_filter }}{% endif %}">Next</a>
+    <a href="/alerts?page={{ page + 1 }}{{ filters }}">Next</a>
     {% endif %}
 </div>
 {% endif %}
