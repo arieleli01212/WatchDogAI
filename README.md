@@ -8,7 +8,9 @@ municipal control center. Camera telemetry and alert events are also
 published to the LoRa smart-campus gateway over MQTT.
 
 See [docs/architecture.md](docs/architecture.md) for the full design,
-including why video travels over IP while LoRa carries telemetry.
+including why video travels over IP while LoRa carries telemetry, and
+[docs/INSTALL.md](docs/INSTALL.md) for the complete installation and
+prerequisites guide (MongoDB, MQTT, GPU, service setup, troubleshooting).
 
 ## Features
 
