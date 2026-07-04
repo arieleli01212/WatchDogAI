@@ -178,6 +178,30 @@ class Settings:
     behavior_event_cooldown: float = field(
         default_factory=lambda: float(os.getenv("BEHAVIOR_EVENT_COOLDOWN", "30"))
     )
+    control_center_url: str = field(
+        default_factory=lambda: os.getenv("CONTROL_CENTER_URL", "")
+    )
+    control_center_api_key: str = field(
+        default_factory=lambda: os.getenv("CONTROL_CENTER_API_KEY", "")
+    )
+    mqtt_host: str = field(
+        default_factory=lambda: os.getenv("MQTT_HOST", "")
+    )
+    mqtt_port: int = field(
+        default_factory=lambda: int(os.getenv("MQTT_PORT", "1883"))
+    )
+    mqtt_username: str = field(
+        default_factory=lambda: os.getenv("MQTT_USERNAME", "")
+    )
+    mqtt_password: str = field(
+        default_factory=lambda: os.getenv("MQTT_PASSWORD", "")
+    )
+    mqtt_base_topic: str = field(
+        default_factory=lambda: os.getenv("MQTT_BASE_TOPIC", "watchdog")
+    )
+    telemetry_interval: float = field(
+        default_factory=lambda: float(os.getenv("TELEMETRY_INTERVAL", "30"))
+    )
 
 
 def get_settings() -> Settings:

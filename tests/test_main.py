@@ -121,6 +121,57 @@ class TestMain:
         mock_create_app.assert_called_once_with(settings)
         mock_uvicorn.run.assert_called_once()
 
+    @patch("main.TelemetryLoop")
+    @patch("main.MqttGatewayClient")
+    @patch("main.ControlCenterNotifier")
+    @patch("main.uvicorn")
+    @patch("main.create_app")
+    @patch("main.CameraPipeline")
+    @patch("main.AlertManager")
+    @patch("main.ViolenceDetector")
+    @patch("main.setup_logging")
+    @patch("main.get_settings")
+    def test_main_wires_outbound_notifiers(
+        self,
+        mock_get_settings,
+        mock_setup_logging,
+        mock_detector_cls,
+        mock_alert_manager_cls,
+        mock_pipeline_cls,
+        mock_create_app,
+        mock_uvicorn,
+        mock_notifier_cls,
+        mock_gateway_cls,
+        mock_telemetry_cls,
+    ):
+        settings = Settings(
+            cameras=(CameraConfig(id="cam0", source=0),),
+            control_center_url="http://control-center/api/alerts",
+            control_center_api_key="key",
+            mqtt_host="gateway.campus",
+        )
+        mock_get_settings.return_value = settings
+        mock_setup_logging.return_value = MagicMock()
+        mock_create_app.return_value = MagicMock()
+        mock_uvicorn.run = MagicMock()
+
+        from main import main
+        main()
+
+        mock_notifier_cls.assert_called_once_with(
+            url="http://control-center/api/alerts", api_key="key"
+        )
+        mock_gateway_cls.assert_called_once()
+        manager = mock_alert_manager_cls.return_value
+        assert manager.add_notifier.call_count == 2
+
+        mock_telemetry_cls.assert_called_once()
+        mock_telemetry_cls.return_value.start.assert_called_once()
+
+        # Shutdown releases the outbound channels
+        mock_notifier_cls.return_value.close.assert_called_once()
+        mock_gateway_cls.return_value.close.assert_called_once()
+
     @patch("main.uvicorn")
     @patch("main.create_app")
     @patch("main.CameraPipeline")
