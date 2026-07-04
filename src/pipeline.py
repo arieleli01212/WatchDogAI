@@ -48,7 +48,6 @@ class CameraPipeline:
 
         self.camera = Camera(
             source=config.source,
-            clip_length=settings.clip_length,
             camera_id=config.id,
             name=config.name,
             width=config.width,

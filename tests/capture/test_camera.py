@@ -1,4 +1,4 @@
-"""Tests for the Camera capture module."""
+﻿"""Tests for the Camera capture module."""
 
 from __future__ import annotations
 
@@ -37,83 +37,10 @@ class TestCameraOpensSource:
     @patch("src.capture.camera.cv2.VideoCapture")
     def test_camera_opens_source(self, mock_vc_cls, mock_capture):
         mock_vc_cls.return_value = mock_capture
-        cam = Camera(source=0, clip_length=16)
+        cam = Camera(source=0)
 
         mock_vc_cls.assert_called_once_with(0)
         assert cam.is_opened() is True
-        cam.release()
-
-
-class TestFrameBuffer:
-    """Test that the frame buffer collects frames correctly."""
-
-    @patch("src.capture.camera.cv2.VideoCapture")
-    def test_frame_buffer_collects_frames(self, mock_vc_cls, mock_capture):
-        mock_vc_cls.return_value = mock_capture
-        cam = Camera(source=0, clip_length=4)
-
-        for i in range(3):
-            cam.add_frame(_make_frame(i))
-
-        # Buffer should have 3 frames
-        assert len(cam._buffer) == 3
-        cam.release()
-
-
-class TestGetClip:
-    """Test get_clip behaviour for partial and full buffers."""
-
-    @patch("src.capture.camera.cv2.VideoCapture")
-    def test_get_clip_returns_none_when_buffer_not_full(self, mock_vc_cls, mock_capture):
-        mock_vc_cls.return_value = mock_capture
-        cam = Camera(source=0, clip_length=4)
-
-        cam.add_frame(_make_frame(0))
-        cam.add_frame(_make_frame(1))
-
-        assert cam.get_clip() is None
-        cam.release()
-
-    @patch("src.capture.camera.cv2.VideoCapture")
-    def test_get_clip_returns_clip_when_buffer_full(self, mock_vc_cls, mock_capture):
-        mock_vc_cls.return_value = mock_capture
-        cam = Camera(source=0, clip_length=4)
-
-        for i in range(4):
-            cam.add_frame(_make_frame(i))
-
-        clip = cam.get_clip()
-        assert clip is not None
-        assert isinstance(clip, np.ndarray)
-        assert clip.shape[0] == 4
-        # Verify frame ordering: first frame filled with 0, last with 3
-        assert clip[0, 0, 0, 0] == 0
-        assert clip[3, 0, 0, 0] == 3
-        cam.release()
-
-
-class TestSlidingWindow:
-    """Test that the sliding window drops the oldest frame when full."""
-
-    @patch("src.capture.camera.cv2.VideoCapture")
-    def test_sliding_window_drops_oldest_frame(self, mock_vc_cls, mock_capture):
-        mock_vc_cls.return_value = mock_capture
-        cam = Camera(source=0, clip_length=4)
-
-        # Fill buffer with frames 0..3
-        for i in range(4):
-            cam.add_frame(_make_frame(i))
-
-        # Add one more frame (value=99); oldest (value=0) should be dropped
-        cam.add_frame(_make_frame(99))
-
-        clip = cam.get_clip()
-        assert clip is not None
-        assert clip.shape[0] == 4
-        # First frame should now be value 1 (0 was dropped)
-        assert clip[0, 0, 0, 0] == 1
-        # Last frame should be 99
-        assert clip[3, 0, 0, 0] == 99
         cam.release()
 
 
@@ -123,7 +50,7 @@ class TestCameraRelease:
     @patch("src.capture.camera.cv2.VideoCapture")
     def test_camera_release(self, mock_vc_cls, mock_capture):
         mock_vc_cls.return_value = mock_capture
-        cam = Camera(source=0, clip_length=16)
+        cam = Camera(source=0)
 
         cam.release()
         mock_capture.release.assert_called_once()
@@ -137,7 +64,7 @@ class TestContextManager:
     def test_context_manager(self, mock_vc_cls, mock_capture):
         mock_vc_cls.return_value = mock_capture
 
-        with Camera(source=0, clip_length=16) as cam:
+        with Camera(source=0) as cam:
             assert cam.is_opened() is True
 
         mock_capture.release.assert_called_once()
@@ -174,7 +101,7 @@ class TestGetLatestFrame:
     @patch("src.capture.camera.cv2.VideoCapture")
     def test_get_latest_frame(self, mock_vc_cls, mock_capture):
         mock_vc_cls.return_value = mock_capture
-        cam = Camera(source=0, clip_length=4)
+        cam = Camera(source=0)
 
         cam.add_frame(_make_frame(10))
         cam.add_frame(_make_frame(20))
@@ -187,7 +114,7 @@ class TestGetLatestFrame:
     @patch("src.capture.camera.cv2.VideoCapture")
     def test_get_latest_frame_returns_none_when_empty(self, mock_vc_cls, mock_capture):
         mock_vc_cls.return_value = mock_capture
-        cam = Camera(source=0, clip_length=4)
+        cam = Camera(source=0)
 
         assert cam.get_latest_frame() is None
         cam.release()
@@ -357,7 +284,7 @@ class TestFrameSequence:
     @patch("src.capture.camera.cv2.VideoCapture")
     def test_sequence_increments_per_frame(self, mock_vc_cls, mock_capture):
         mock_vc_cls.return_value = mock_capture
-        cam = Camera(source=0, clip_length=4)
+        cam = Camera(source=0)
 
         _, seq0 = cam.get_latest_frame_with_seq()
         assert seq0 == 0

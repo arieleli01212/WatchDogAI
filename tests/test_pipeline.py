@@ -69,7 +69,6 @@ class TestPipelineConstruction:
 
     def test_camera_built_from_config(self, tmp_path):
         settings = Settings(
-            clip_length=42,
             clip_dir=str(tmp_path / "clips"),
             db_path=str(tmp_path / "db.sqlite"),
         )
@@ -93,7 +92,6 @@ class TestPipelineConstruction:
             )
             mock_camera_cls.assert_called_once_with(
                 source="rtsp://x/stream",
-                clip_length=42,
                 camera_id="cam-north",
                 name="North",
                 width=1280,

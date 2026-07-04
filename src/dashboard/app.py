@@ -2,13 +2,43 @@
 
 from __future__ import annotations
 
+import hmac
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from src.config import Settings, get_settings
+
+TOKEN_COOKIE = "watchdog_token"
+
+
+def _install_token_auth(app: FastAPI, token: str) -> None:
+    """Require the API token on every request.
+
+    Accepted as an ``X-API-Token`` header (API clients), a ``token``
+    query parameter (first browser visit), or the session cookie the
+    middleware sets after a successful query-parameter login — the
+    cookie is what lets the dashboard's MJPEG <img> tags and fetch()
+    calls authenticate without embedding the token in every URL.
+    """
+
+    @app.middleware("http")
+    async def token_auth(request: Request, call_next):
+        provided = (
+            request.headers.get("X-API-Token")
+            or request.query_params.get("token")
+            or request.cookies.get(TOKEN_COOKIE)
+            or ""
+        )
+        if not hmac.compare_digest(provided, token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        response = await call_next(request)
+        if request.query_params.get("token") == token:
+            response.set_cookie(TOKEN_COOKIE, token, httponly=True)
+        return response
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -17,6 +47,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     settings = settings or get_settings()
     app.state.settings = settings
+
+    if settings.api_token:
+        _install_token_auth(app, settings.api_token)
 
     templates_dir = Path(__file__).parent / "templates"
     app.state.templates = Jinja2Templates(directory=str(templates_dir))

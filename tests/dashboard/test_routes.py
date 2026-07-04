@@ -213,6 +213,64 @@ async def test_api_delete_alert(app, client, tmp_path):
 
 
 # ------------------------------------------------------------------
+# API token auth
+# ------------------------------------------------------------------
+
+
+@pytest.fixture()
+def secured_app(tmp_path):
+    settings = Settings(
+        api_token="s3cret",
+        clip_dir=str(tmp_path / "clips"),
+        db_path=str(tmp_path / "db.sqlite"),
+    )
+    return create_app(settings)
+
+
+@pytest.mark.anyio
+async def test_requests_without_token_are_rejected(secured_app):
+    transport = ASGITransport(app=secured_app)
+    async with AsyncClient(transport=transport, base_url="http://t") as ac:
+        resp = await ac.get("/api/status")
+    assert resp.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_header_token_accepted(secured_app):
+    transport = ASGITransport(app=secured_app)
+    async with AsyncClient(transport=transport, base_url="http://t") as ac:
+        resp = await ac.get("/api/status", headers={"X-API-Token": "s3cret"})
+    assert resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_wrong_token_rejected(secured_app):
+    transport = ASGITransport(app=secured_app)
+    async with AsyncClient(transport=transport, base_url="http://t") as ac:
+        resp = await ac.get("/api/status", headers={"X-API-Token": "nope"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_query_token_sets_session_cookie(secured_app):
+    transport = ASGITransport(app=secured_app)
+    async with AsyncClient(transport=transport, base_url="http://t") as ac:
+        resp = await ac.get("/?token=s3cret")
+        assert resp.status_code == 200
+        assert resp.cookies.get("watchdog_token") == "s3cret"
+        # Subsequent request authenticates via the cookie alone
+        resp = await ac.get("/api/status")
+        assert resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_no_auth_when_token_unset(client):
+    async with client as ac:
+        resp = await ac.get("/api/status")
+    assert resp.status_code == 200
+
+
+# ------------------------------------------------------------------
 # Video feeds
 # ------------------------------------------------------------------
 

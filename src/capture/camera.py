@@ -6,7 +6,6 @@ import enum
 import logging
 import threading
 import time
-from collections import deque
 from typing import Optional
 
 import cv2
@@ -36,16 +35,14 @@ class Camera:
     """Reads frames from a webcam, video file, or network stream.
 
     Loops video files, reconnects dropped streams with exponential
-    backoff, applies the configured capture quality, and maintains a
-    thread-safe sliding-window buffer of recent frames with a sequence
-    counter so consumers can tell new frames from already-seen ones.
+    backoff, applies the configured capture quality, and keeps the
+    latest frame with a sequence counter so consumers can tell new
+    frames from already-seen ones.
 
     Parameters
     ----------
     source:
         Webcam index (int), video file path, or stream URL.
-    clip_length:
-        Number of frames in the sliding window buffer.
     camera_id / name:
         Identity attached to alerts, clips, and dashboard routes.
     width / height / target_fps:
@@ -60,7 +57,6 @@ class Camera:
     def __init__(
         self,
         source: int | str = 0,
-        clip_length: int = 16,
         camera_id: str = "cam0",
         name: str = "",
         width: int = 0,
@@ -74,8 +70,6 @@ class Camera:
         self._width = width
         self._height = height
         self._target_fps = target_fps
-        self._clip_length = clip_length
-        self._buffer: deque[np.ndarray] = deque(maxlen=clip_length)
         self._released = False
         self._lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
@@ -176,27 +170,11 @@ class Camera:
         self._cap = self._open()
 
     def add_frame(self, frame: np.ndarray) -> None:
-        """Push a frame into the sliding window buffer."""
+        """Publish a captured frame as the latest frame."""
         with self._lock:
-            self._buffer.append(frame)
             self._latest_frame = frame
             self._seq += 1
             self._last_frame_time = time.monotonic()
-
-    def get_clip(self) -> Optional[np.ndarray]:
-        """Return the current buffer as a numpy array of shape (clip_length, H, W, C).
-
-        Returns None if the buffer is not yet full.
-        """
-        with self._lock:
-            if len(self._buffer) < self._clip_length:
-                return None
-            return np.stack(list(self._buffer))
-
-    def get_buffer(self) -> list[np.ndarray]:
-        """Return all frames currently in the sliding window buffer."""
-        with self._lock:
-            return list(self._buffer)
 
     def get_latest_frame(self) -> Optional[np.ndarray]:
         """Return the most recently captured frame, or None if no frames yet."""

@@ -30,10 +30,6 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.cooldown_seconds == 5
 
-    def test_default_clip_length(self):
-        settings = Settings()
-        assert settings.clip_length == 90
-
     def test_default_pre_event_seconds(self):
         settings = Settings()
         assert settings.pre_event_seconds == 3
@@ -102,11 +98,6 @@ class TestSettingsFromEnv:
         monkeypatch.setenv("LOG_LEVEL", "DEBUG")
         settings = Settings()
         assert settings.log_level == "DEBUG"
-
-    def test_clip_length_from_env(self, monkeypatch):
-        monkeypatch.setenv("CLIP_LENGTH", "32")
-        settings = Settings()
-        assert settings.clip_length == 32
 
     def test_db_path_from_env(self, monkeypatch):
         monkeypatch.setenv("DB_PATH", "/tmp/test.db")

@@ -116,9 +116,6 @@ class Settings:
     cooldown_seconds: int = field(
         default_factory=lambda: int(os.getenv("COOLDOWN_SECONDS", "5"))
     )
-    clip_length: int = field(
-        default_factory=lambda: int(os.getenv("CLIP_LENGTH", "90"))
-    )
     pre_event_seconds: float = field(
         default_factory=lambda: float(os.getenv("PRE_EVENT_SECONDS", "3"))
     )
@@ -201,6 +198,9 @@ class Settings:
     )
     telemetry_interval: float = field(
         default_factory=lambda: float(os.getenv("TELEMETRY_INTERVAL", "30"))
+    )
+    api_token: str = field(
+        default_factory=lambda: os.getenv("API_TOKEN", "")
     )
 
 
