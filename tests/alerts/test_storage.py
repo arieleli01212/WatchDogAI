@@ -41,7 +41,7 @@ class TestAlertStorage:
         assert "id" in columns
         assert "timestamp" in columns
         assert "confidence" in columns
-        assert "snapshot_path" in columns
+        assert "clip_path" in columns
         assert "camera_id" in columns
         assert "status" in columns
 
@@ -49,31 +49,32 @@ class TestAlertStorage:
         alert_id = storage.save_alert(
             timestamp="2025-01-15T10:30:00",
             confidence=0.92,
-            snapshot_path="data/snapshots/2025-01-15/10-30-00_cam0.jpg",
+            clip_path="data/clips/2025-01-15/10-30-00_cam0.mp4",
             camera_id="cam0",
         )
         assert isinstance(alert_id, int)
         assert alert_id >= 1
 
     def test_save_alert_returns_incrementing_ids(self, storage: AlertStorage):
-        id1 = storage.save_alert("2025-01-15T10:30:00", 0.92, "snap1.jpg", "cam0")
-        id2 = storage.save_alert("2025-01-15T10:31:00", 0.88, "snap2.jpg", "cam0")
+        id1 = storage.save_alert("2025-01-15T10:30:00", 0.92, "clip1.mp4", "cam0")
+        id2 = storage.save_alert("2025-01-15T10:31:00", 0.88, "clip2.mp4", "cam0")
         assert id2 > id1
 
     def test_get_alerts_returns_saved_alerts(self, storage: AlertStorage):
-        storage.save_alert("2025-01-15T10:30:00", 0.92, "snap1.jpg", "cam0")
-        storage.save_alert("2025-01-15T10:31:00", 0.88, "snap2.jpg", "cam1")
+        storage.save_alert("2025-01-15T10:30:00", 0.92, "clip1.mp4", "cam0")
+        storage.save_alert("2025-01-15T10:31:00", 0.88, "clip2.mp4", "cam1")
 
         alerts = storage.get_alerts()
+        # Newest first (ordered by id desc)
         assert len(alerts) == 2
-        assert alerts[0]["confidence"] == 0.92
-        assert alerts[0]["camera_id"] == "cam0"
-        assert alerts[1]["confidence"] == 0.88
-        assert alerts[1]["camera_id"] == "cam1"
+        assert alerts[0]["confidence"] == 0.88
+        assert alerts[0]["camera_id"] == "cam1"
+        assert alerts[1]["confidence"] == 0.92
+        assert alerts[1]["camera_id"] == "cam0"
 
     def test_get_alerts_respects_limit_and_offset(self, storage: AlertStorage):
         for i in range(10):
-            storage.save_alert(f"2025-01-15T10:3{i}:00", 0.9, f"snap{i}.jpg", "cam0")
+            storage.save_alert(f"2025-01-15T10:3{i}:00", 0.9, f"clip{i}.mp4", "cam0")
 
         alerts = storage.get_alerts(limit=3, offset=0)
         assert len(alerts) == 3
@@ -82,8 +83,8 @@ class TestAlertStorage:
         assert len(alerts) == 2
 
     def test_get_alerts_with_status_filter(self, storage: AlertStorage):
-        storage.save_alert("2025-01-15T10:30:00", 0.92, "snap1.jpg", "cam0")
-        id2 = storage.save_alert("2025-01-15T10:31:00", 0.88, "snap2.jpg", "cam1")
+        storage.save_alert("2025-01-15T10:30:00", 0.92, "clip1.mp4", "cam0")
+        id2 = storage.save_alert("2025-01-15T10:31:00", 0.88, "clip2.mp4", "cam1")
         storage.update_status(id2, "acknowledged")
 
         new_alerts = storage.get_alerts(status="new")
@@ -94,15 +95,24 @@ class TestAlertStorage:
         assert len(ack_alerts) == 1
         assert ack_alerts[0]["status"] == "acknowledged"
 
+    def test_get_alert_returns_single_alert(self, storage: AlertStorage):
+        alert_id = storage.save_alert("2025-01-15T10:30:00", 0.92, "clip1.mp4", "cam0")
+        alert = storage.get_alert(alert_id)
+        assert alert is not None
+        assert alert["clip_path"] == "clip1.mp4"
+
+    def test_get_alert_nonexistent_returns_none(self, storage: AlertStorage):
+        assert storage.get_alert(9999) is None
+
     def test_get_alert_count(self, storage: AlertStorage):
         assert storage.get_alert_count() == 0
-        storage.save_alert("2025-01-15T10:30:00", 0.92, "snap1.jpg", "cam0")
-        storage.save_alert("2025-01-15T10:31:00", 0.88, "snap2.jpg", "cam1")
+        storage.save_alert("2025-01-15T10:30:00", 0.92, "clip1.mp4", "cam0")
+        storage.save_alert("2025-01-15T10:31:00", 0.88, "clip2.mp4", "cam1")
         assert storage.get_alert_count() == 2
 
     def test_get_alert_count_with_status_filter(self, storage: AlertStorage):
-        storage.save_alert("2025-01-15T10:30:00", 0.92, "snap1.jpg", "cam0")
-        id2 = storage.save_alert("2025-01-15T10:31:00", 0.88, "snap2.jpg", "cam1")
+        storage.save_alert("2025-01-15T10:30:00", 0.92, "clip1.mp4", "cam0")
+        id2 = storage.save_alert("2025-01-15T10:31:00", 0.88, "clip2.mp4", "cam1")
         storage.update_status(id2, "acknowledged")
 
         assert storage.get_alert_count(status="new") == 1
@@ -110,7 +120,7 @@ class TestAlertStorage:
 
     def test_update_status(self, storage: AlertStorage):
         alert_id = storage.save_alert(
-            "2025-01-15T10:30:00", 0.92, "snap1.jpg", "cam0"
+            "2025-01-15T10:30:00", 0.92, "clip1.mp4", "cam0"
         )
         result = storage.update_status(alert_id, "acknowledged")
         assert result is True
@@ -121,3 +131,13 @@ class TestAlertStorage:
     def test_update_status_nonexistent_returns_false(self, storage: AlertStorage):
         result = storage.update_status(9999, "acknowledged")
         assert result is False
+
+    def test_delete_alert(self, storage: AlertStorage):
+        alert_id = storage.save_alert(
+            "2025-01-15T10:30:00", 0.92, "clip1.mp4", "cam0"
+        )
+        assert storage.delete_alert(alert_id) is True
+        assert storage.get_alert(alert_id) is None
+
+    def test_delete_alert_nonexistent_returns_false(self, storage: AlertStorage):
+        assert storage.delete_alert(9999) is False

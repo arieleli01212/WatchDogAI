@@ -3,7 +3,7 @@ __pycache__/
 *.pyo
 .env
 venv/
-data/snapshots/
+data/
 logs/
 models/
 .pytest_cache/
