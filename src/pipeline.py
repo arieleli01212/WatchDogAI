@@ -8,6 +8,7 @@ import time
 
 from src.alerts.clip_recorder import ClipRecorder
 from src.alerts.manager import AlertManager
+from src.analytics.behavior import BehaviorAnalyzer
 from src.capture.camera import Camera
 from src.config import CameraConfig, Settings
 from src.detector.model import ViolenceDetector
@@ -73,6 +74,16 @@ class CameraPipeline:
                     "Camera %s: object tracker unavailable, running without "
                     "people/vehicle analytics", config.id,
                 )
+
+        # Behavior analytics need trajectories, so they require the tracker
+        self._behavior: BehaviorAnalyzer | None = None
+        if settings.behavior_enabled and self._tracker is not None:
+            self._behavior = BehaviorAnalyzer(
+                loiter_seconds=settings.loiter_seconds,
+                run_speed=settings.run_speed_threshold,
+                min_samples=settings.anomaly_min_samples,
+                event_cooldown=settings.behavior_event_cooldown,
+            )
         self._threads: list[threading.Thread] = []
 
     # ------------------------------------------------------------------
@@ -143,7 +154,9 @@ class CameraPipeline:
 
             is_confirmed = consecutive_violence >= required_hits
 
-            objects, counts = self._track_objects(frame)
+            tracked = self._track_objects(frame)
+            counts = self._tracker.counts if self._tracker else {}
+            behavior_events = self._analyze_behavior(tracked, frame.shape[:2])
 
             logger.debug(
                 "Camera %s: %s (violence=%.1f%%) streak=%d/%d people=%d vehicles=%d",
@@ -159,34 +172,59 @@ class CameraPipeline:
                 "streak": consecutive_violence,
                 "required": required_hits,
                 "counts": counts,
-                "objects": objects,
+                "objects": [
+                    {
+                        "track_id": t.track_id,
+                        "category": t.category,
+                        "label": t.label,
+                        "confidence": round(t.confidence, 3),
+                        "box": [round(v, 1) for v in t.box],
+                    }
+                    for t in tracked
+                ],
+                "behavior_events": behavior_events,
                 "last_update": time.time(),
             }
 
-            self.clip_recorder.on_detection(is_confirmed, confidence)
+            # Violence takes precedence; otherwise behavior events trigger clips
+            if is_confirmed:
+                self.clip_recorder.on_detection(True, confidence, alert_type="violence")
+            elif behavior_events:
+                top = max(behavior_events, key=lambda e: e["score"])
+                logger.info(
+                    "Camera %s: behavior event %s (track %s): %s",
+                    self.config.id, top["type"], top["track_id"], top["details"],
+                )
+                self.clip_recorder.on_detection(
+                    True, top["score"], alert_type=top["type"]
+                )
+            else:
+                self.clip_recorder.on_detection(False, confidence)
 
         logger.info("Camera %s: analysis loop stopped", self.config.id)
 
-    def _track_objects(self, frame) -> tuple[list[dict], dict]:
-        """Run people/vehicle tracking; returns (objects, counts) for the status feed."""
+    def _track_objects(self, frame) -> list:
+        """Run people/vehicle tracking; returns TrackedObjects for this frame."""
         if self._tracker is None:
-            return [], {}
+            return []
         try:
-            tracked = self._tracker.update(frame)
+            return self._tracker.update(frame)
         except Exception:
             logger.exception(
                 "Camera %s: object tracking failed, disabling it", self.config.id
             )
             self._tracker = None
-            return [], {}
-        objects = [
-            {
-                "track_id": t.track_id,
-                "category": t.category,
-                "label": t.label,
-                "confidence": round(t.confidence, 3),
-                "box": [round(v, 1) for v in t.box],
-            }
-            for t in tracked
-        ]
-        return objects, self._tracker.counts
+            return []
+
+    def _analyze_behavior(self, tracked: list, frame_size: tuple[int, int]) -> list[dict]:
+        """Run behavior analytics on the tracked objects for this frame."""
+        if self._behavior is None:
+            return []
+        try:
+            return self._behavior.update(tracked, frame_size)
+        except Exception:
+            logger.exception(
+                "Camera %s: behavior analytics failed, disabling them", self.config.id
+            )
+            self._behavior = None
+            return []

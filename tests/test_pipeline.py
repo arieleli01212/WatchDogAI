@@ -32,7 +32,8 @@ def make_pipeline(tmp_path):
         stop_event = threading.Event()
         with patch("src.pipeline.Camera") as mock_camera_cls, \
              patch("src.pipeline.ClipRecorder"), \
-             patch("src.pipeline.ObjectTracker") as mock_tracker_cls:
+             patch("src.pipeline.ObjectTracker") as mock_tracker_cls, \
+             patch("src.pipeline.BehaviorAnalyzer") as mock_behavior_cls:
             camera = mock_camera_cls.return_value
             camera.fps = 30.0
             tracker = mock_tracker_cls.return_value
@@ -40,6 +41,7 @@ def make_pipeline(tmp_path):
             tracker.counts = {
                 "people": 0, "vehicles": 0, "unique_people": 0, "unique_vehicles": 0,
             }
+            mock_behavior_cls.return_value.update.return_value = []
             pipeline = CameraPipeline(
                 config=CameraConfig(id="cam-test", source=0, name="Test"),
                 settings=settings,
@@ -74,7 +76,8 @@ class TestPipelineConstruction:
         stop_event = threading.Event()
         with patch("src.pipeline.Camera") as mock_camera_cls, \
              patch("src.pipeline.ClipRecorder") as mock_recorder_cls, \
-             patch("src.pipeline.ObjectTracker"):
+             patch("src.pipeline.ObjectTracker"), \
+             patch("src.pipeline.BehaviorAnalyzer"):
             mock_camera_cls.return_value.fps = 25.0
             config = CameraConfig(
                 id="cam-north", source="rtsp://x/stream", name="North",
@@ -257,6 +260,70 @@ class TestObjectTracking:
         status = pipeline._status["cam-test"]
         assert status["objects"] == []
         assert status["counts"] == {}
+
+
+class TestBehaviorIntegration:
+    """Behavior events flow from the analyzer into typed alerts."""
+
+    LOITER_EVENT = {
+        "type": "loitering", "track_id": 4, "category": "person",
+        "score": 0.8, "details": "present 65s",
+    }
+
+    def test_behavior_event_triggers_typed_alert(self, make_pipeline):
+        pipeline, camera, recorder, stop_event = make_pipeline()
+        seq = itertools.count(1)
+        camera.get_latest_frame_with_seq.side_effect = lambda: (FAKE_FRAME, next(seq))
+        pipeline._detector.predict_frame.return_value = ("normal", 0.9)
+        pipeline._behavior.update.return_value = [self.LOITER_EVENT]
+
+        _run_analysis(pipeline, stop_event)
+
+        typed_calls = [
+            c for c in recorder.on_detection.call_args_list
+            if c.kwargs.get("alert_type") == "loitering"
+        ]
+        assert typed_calls
+        assert typed_calls[0].args == (True, 0.8)
+
+    def test_violence_takes_precedence_over_behavior(self, make_pipeline):
+        pipeline, camera, recorder, stop_event = make_pipeline()
+        seq = itertools.count(1)
+        camera.get_latest_frame_with_seq.side_effect = lambda: (FAKE_FRAME, next(seq))
+        pipeline._detector.predict_frame.return_value = ("violence", 0.95)
+        pipeline._behavior.update.return_value = [self.LOITER_EVENT]
+
+        _run_analysis(pipeline, stop_event)
+
+        confirmed = [
+            c for c in recorder.on_detection.call_args_list if c.args[0] is True
+        ]
+        assert confirmed
+        # Once the violence streak confirms, the alert type must be violence
+        assert all(c.kwargs.get("alert_type") == "violence" for c in confirmed[2:])
+
+    def test_behavior_events_published_in_status(self, make_pipeline):
+        pipeline, camera, recorder, stop_event = make_pipeline()
+        seq = itertools.count(1)
+        camera.get_latest_frame_with_seq.side_effect = lambda: (FAKE_FRAME, next(seq))
+        pipeline._detector.predict_frame.return_value = ("normal", 0.9)
+        pipeline._behavior.update.return_value = [self.LOITER_EVENT]
+
+        _run_analysis(pipeline, stop_event)
+
+        assert pipeline._status["cam-test"]["behavior_events"] == [self.LOITER_EVENT]
+
+    def test_behavior_failure_disables_analytics(self, make_pipeline):
+        pipeline, camera, recorder, stop_event = make_pipeline()
+        seq = itertools.count(1)
+        camera.get_latest_frame_with_seq.side_effect = lambda: (FAKE_FRAME, next(seq))
+        pipeline._detector.predict_frame.return_value = ("normal", 0.9)
+        pipeline._behavior.update.side_effect = RuntimeError("boom")
+
+        _run_analysis(pipeline, stop_event)
+
+        assert pipeline._behavior is None
+        assert pipeline._status["cam-test"]["behavior_events"] == []
 
 
 class TestCaptureLoop:

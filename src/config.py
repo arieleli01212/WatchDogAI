@@ -153,6 +153,22 @@ class Settings:
     yolo_confidence: float = field(
         default_factory=lambda: float(os.getenv("YOLO_CONFIDENCE", "0.4"))
     )
+    behavior_enabled: bool = field(
+        default_factory=lambda: os.getenv("BEHAVIOR_DETECTION", "true").lower()
+        in ("1", "true", "yes")
+    )
+    loiter_seconds: float = field(
+        default_factory=lambda: float(os.getenv("LOITER_SECONDS", "60"))
+    )
+    run_speed_threshold: float = field(
+        default_factory=lambda: float(os.getenv("RUN_SPEED_THRESHOLD", "0.35"))
+    )
+    anomaly_min_samples: int = field(
+        default_factory=lambda: int(os.getenv("ANOMALY_MIN_SAMPLES", "200"))
+    )
+    behavior_event_cooldown: float = field(
+        default_factory=lambda: float(os.getenv("BEHAVIOR_EVENT_COOLDOWN", "30"))
+    )
 
 
 def get_settings() -> Settings:
