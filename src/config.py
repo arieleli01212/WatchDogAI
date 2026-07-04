@@ -143,6 +143,16 @@ class Settings:
     camera_health_max_age: float = field(
         default_factory=lambda: float(os.getenv("CAMERA_HEALTH_MAX_AGE", "5"))
     )
+    object_detection_enabled: bool = field(
+        default_factory=lambda: os.getenv("OBJECT_DETECTION", "true").lower()
+        in ("1", "true", "yes")
+    )
+    yolo_model: str = field(
+        default_factory=lambda: os.getenv("YOLO_MODEL", "yolov8n.pt")
+    )
+    yolo_confidence: float = field(
+        default_factory=lambda: float(os.getenv("YOLO_CONFIDENCE", "0.4"))
+    )
 
 
 def get_settings() -> Settings:

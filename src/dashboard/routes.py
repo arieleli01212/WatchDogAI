@@ -17,8 +17,13 @@ IDLE_STATUS = {
     "violence_score": 0.0,
     "streak": 0,
     "required": 0,
+    "counts": {},
+    "objects": [],
     "last_update": None,
 }
+
+# BGR overlay colors per tracked-object category
+OVERLAY_COLORS = {"person": (80, 200, 120), "vehicle": (60, 140, 255)}
 
 
 def _camera_snapshot(request: Request) -> dict:
@@ -137,6 +142,18 @@ async def api_cameras(request: Request) -> JSONResponse:
     return JSONResponse(list(_camera_snapshot(request).values()))
 
 
+@router.get("/api/counts")
+async def api_counts(request: Request) -> JSONResponse:
+    """Return live people/vehicle counts per camera."""
+    status_registry = request.app.state.camera_status
+    return JSONResponse(
+        {
+            camera_id: status_registry.get(camera_id, {}).get("counts", {})
+            for camera_id in request.app.state.cameras
+        }
+    )
+
+
 @router.get("/api/alerts")
 async def api_alerts(
     request: Request,
@@ -177,6 +194,28 @@ async def api_delete_alert(
 # ---------------------------------------------------------------------------
 
 
+def _encode_with_overlay(frame, objects: list[dict]) -> bytes:
+    """Draw tracked-object boxes on a copy of the frame and JPEG-encode it."""
+    if objects:
+        frame = frame.copy()
+        for obj in objects:
+            x1, y1, x2, y2 = (int(v) for v in obj["box"])
+            color = OVERLAY_COLORS.get(obj["category"], (200, 200, 200))
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(
+                frame,
+                f"{obj['label']} #{obj['track_id']}",
+                (x1, max(y1 - 6, 12)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+    _, buffer = cv2.imencode(".jpg", frame)
+    return buffer.tobytes()
+
+
 async def _generate_frames(request: Request, camera_id: str):
     """Yield JPEG frames for one camera's MJPEG stream."""
     while True:
@@ -185,11 +224,13 @@ async def _generate_frames(request: Request, camera_id: str):
         camera = request.app.state.cameras.get(camera_id)
         frame = camera.get_latest_frame() if camera else None
         if frame is not None:
+            status = request.app.state.camera_status.get(camera_id, {})
+            objects = status.get("objects", [])
             # Encode off the event loop so DB queries and other feeds aren't blocked
-            _, buffer = await asyncio.to_thread(cv2.imencode, ".jpg", frame)
+            payload = await asyncio.to_thread(_encode_with_overlay, frame, objects)
             yield (
                 b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + payload + b"\r\n"
             )
         await asyncio.sleep(0.033)  # ~30 fps
 

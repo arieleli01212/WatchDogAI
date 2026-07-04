@@ -71,6 +71,17 @@
 
     .status-bar .label { font-weight: 700; font-size: 0.95rem; }
     .status-bar .confidence { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 0.9rem; }
+
+    .counts-bar {
+        display: flex;
+        gap: 1.5rem;
+        padding: 0.5rem 1rem;
+        border-top: 1px solid #2a2d3a;
+        font-size: 0.85rem;
+        color: #9ca3af;
+        font-variant-numeric: tabular-nums;
+    }
+    .counts-bar b { color: #d1d5db; }
 </style>
 {% endblock %}
 
@@ -94,6 +105,10 @@
         <div id="status-{{ cam_id }}" class="status-bar status-normal">
             <span class="label" id="label-{{ cam_id }}">NORMAL</span>
             <span class="confidence" id="conf-{{ cam_id }}">Violence: 0.0 %</span>
+        </div>
+        <div class="counts-bar">
+            <span>People: <b id="people-{{ cam_id }}">0</b> (unique <b id="upeople-{{ cam_id }}">0</b>)</span>
+            <span>Vehicles: <b id="vehicles-{{ cam_id }}">0</b> (unique <b id="uvehicles-{{ cam_id }}">0</b>)</span>
         </div>
     </div>
     {% endfor %}
@@ -125,6 +140,12 @@
                 const det = cam.detection || {};
                 const score = det.violence_score || 0;
                 confEl.textContent = "Violence: " + (score * 100).toFixed(1) + " %";
+
+                const counts = det.counts || {};
+                document.getElementById("people-" + camId).textContent = counts.people || 0;
+                document.getElementById("upeople-" + camId).textContent = counts.unique_people || 0;
+                document.getElementById("vehicles-" + camId).textContent = counts.vehicles || 0;
+                document.getElementById("uvehicles-" + camId).textContent = counts.unique_vehicles || 0;
 
                 if (!cam.healthy) {
                     bar.className = "status-bar status-offline";

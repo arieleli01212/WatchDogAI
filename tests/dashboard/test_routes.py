@@ -141,6 +141,22 @@ async def test_api_cameras_lists_cameras(app, client):
 
 
 @pytest.mark.anyio
+async def test_api_counts(app, client):
+    app.state.cameras["cam0"] = FakeCamera()
+    app.state.cameras["cam1"] = FakeCamera()
+    app.state.camera_status["cam0"] = {
+        "counts": {"people": 3, "vehicles": 1, "unique_people": 8, "unique_vehicles": 2},
+    }
+
+    async with client as ac:
+        resp = await ac.get("/api/counts")
+    data = resp.json()
+    assert data["cam0"]["people"] == 3
+    assert data["cam0"]["unique_vehicles"] == 2
+    assert data["cam1"] == {}  # no analysis results yet
+
+
+@pytest.mark.anyio
 async def test_api_alerts_returns_list(client):
     async with client as ac:
         resp = await ac.get("/api/alerts")

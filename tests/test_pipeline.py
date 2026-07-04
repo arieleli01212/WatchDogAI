@@ -19,7 +19,7 @@ FAKE_FRAME = np.zeros((32, 32, 3), dtype=np.uint8)
 
 @pytest.fixture()
 def make_pipeline(tmp_path):
-    """Factory that builds a CameraPipeline with mocked camera and recorder."""
+    """Factory that builds a CameraPipeline with mocked camera, recorder, and tracker."""
 
     def _make(settings: Settings | None = None, detector=None):
         settings = settings or Settings(
@@ -31,9 +31,15 @@ def make_pipeline(tmp_path):
         detector = detector or MagicMock()
         stop_event = threading.Event()
         with patch("src.pipeline.Camera") as mock_camera_cls, \
-             patch("src.pipeline.ClipRecorder") as mock_recorder_cls:
+             patch("src.pipeline.ClipRecorder"), \
+             patch("src.pipeline.ObjectTracker") as mock_tracker_cls:
             camera = mock_camera_cls.return_value
             camera.fps = 30.0
+            tracker = mock_tracker_cls.return_value
+            tracker.update.return_value = []
+            tracker.counts = {
+                "people": 0, "vehicles": 0, "unique_people": 0, "unique_vehicles": 0,
+            }
             pipeline = CameraPipeline(
                 config=CameraConfig(id="cam-test", source=0, name="Test"),
                 settings=settings,
@@ -67,7 +73,8 @@ class TestPipelineConstruction:
         )
         stop_event = threading.Event()
         with patch("src.pipeline.Camera") as mock_camera_cls, \
-             patch("src.pipeline.ClipRecorder") as mock_recorder_cls:
+             patch("src.pipeline.ClipRecorder") as mock_recorder_cls, \
+             patch("src.pipeline.ObjectTracker"):
             mock_camera_cls.return_value.fps = 25.0
             config = CameraConfig(
                 id="cam-north", source="rtsp://x/stream", name="North",
@@ -164,6 +171,92 @@ class TestAnalysisLoop:
 
         pipeline._detector.predict_frame.assert_not_called()
         recorder.on_detection.assert_not_called()
+
+
+class TestObjectTracking:
+    """People/vehicle tracking runs inside the analysis loop."""
+
+    def test_tracker_results_published_in_status(self, make_pipeline):
+        from src.detector.objects import TrackedObject
+
+        pipeline, camera, recorder, stop_event = make_pipeline()
+        seq = itertools.count(1)
+        camera.get_latest_frame_with_seq.side_effect = lambda: (FAKE_FRAME, next(seq))
+        pipeline._detector.predict_frame.return_value = ("normal", 0.9)
+        pipeline._tracker.update.return_value = [
+            TrackedObject(
+                track_id=7, category="person", label="person",
+                confidence=0.88, box=(1.0, 2.0, 3.0, 4.0),
+            )
+        ]
+        pipeline._tracker.counts = {
+            "people": 1, "vehicles": 0, "unique_people": 1, "unique_vehicles": 0,
+        }
+
+        _run_analysis(pipeline, stop_event)
+
+        status = pipeline._status["cam-test"]
+        assert status["counts"]["people"] == 1
+        assert status["objects"][0]["track_id"] == 7
+        assert status["objects"][0]["category"] == "person"
+        assert status["objects"][0]["box"] == [1.0, 2.0, 3.0, 4.0]
+
+    def test_tracker_disabled_by_settings(self, tmp_path):
+        settings = Settings(
+            object_detection_enabled=False,
+            clip_dir=str(tmp_path / "clips"),
+            db_path=str(tmp_path / "db.sqlite"),
+        )
+        stop_event = threading.Event()
+        with patch("src.pipeline.Camera") as mock_camera_cls, \
+             patch("src.pipeline.ClipRecorder"), \
+             patch("src.pipeline.ObjectTracker") as mock_tracker_cls:
+            mock_camera_cls.return_value.fps = 30.0
+            pipeline = CameraPipeline(
+                config=CameraConfig(id="cam-test", source=0),
+                settings=settings,
+                detector=MagicMock(),
+                alert_manager=MagicMock(),
+                status_registry={},
+                stop_event=stop_event,
+            )
+        mock_tracker_cls.assert_not_called()
+        assert pipeline._tracker is None
+
+    def test_tracker_construction_failure_is_not_fatal(self, tmp_path):
+        settings = Settings(
+            clip_dir=str(tmp_path / "clips"),
+            db_path=str(tmp_path / "db.sqlite"),
+        )
+        stop_event = threading.Event()
+        with patch("src.pipeline.Camera") as mock_camera_cls, \
+             patch("src.pipeline.ClipRecorder"), \
+             patch("src.pipeline.ObjectTracker", side_effect=RuntimeError("no yolo")):
+            mock_camera_cls.return_value.fps = 30.0
+            pipeline = CameraPipeline(
+                config=CameraConfig(id="cam-test", source=0),
+                settings=settings,
+                detector=MagicMock(),
+                alert_manager=MagicMock(),
+                status_registry={},
+                stop_event=stop_event,
+            )
+        assert pipeline._tracker is None
+
+    def test_tracker_failure_mid_run_disables_tracking(self, make_pipeline):
+        pipeline, camera, recorder, stop_event = make_pipeline()
+        seq = itertools.count(1)
+        camera.get_latest_frame_with_seq.side_effect = lambda: (FAKE_FRAME, next(seq))
+        pipeline._detector.predict_frame.return_value = ("normal", 0.9)
+        pipeline._tracker.update.side_effect = RuntimeError("boom")
+
+        _run_analysis(pipeline, stop_event)
+
+        # Loop kept running (status written) with tracking disabled
+        assert pipeline._tracker is None
+        status = pipeline._status["cam-test"]
+        assert status["objects"] == []
+        assert status["counts"] == {}
 
 
 class TestCaptureLoop:

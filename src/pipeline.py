@@ -11,6 +11,7 @@ from src.alerts.manager import AlertManager
 from src.capture.camera import Camera
 from src.config import CameraConfig, Settings
 from src.detector.model import ViolenceDetector
+from src.detector.objects import ObjectTracker
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,19 @@ class CameraPipeline:
             fps=self.camera.fps if self.camera.fps > 0 else 30.0,
             camera_id=config.id,
         )
+        # Tracker state (track IDs) is per-stream, so each pipeline owns one
+        self._tracker: ObjectTracker | None = None
+        if settings.object_detection_enabled:
+            try:
+                self._tracker = ObjectTracker(
+                    model_path=settings.yolo_model,
+                    confidence=settings.yolo_confidence,
+                )
+            except Exception:
+                logger.exception(
+                    "Camera %s: object tracker unavailable, running without "
+                    "people/vehicle analytics", config.id,
+                )
         self._threads: list[threading.Thread] = []
 
     # ------------------------------------------------------------------
@@ -129,10 +143,13 @@ class CameraPipeline:
 
             is_confirmed = consecutive_violence >= required_hits
 
+            objects, counts = self._track_objects(frame)
+
             logger.debug(
-                "Camera %s: %s (violence=%.1f%%) streak=%d/%d",
+                "Camera %s: %s (violence=%.1f%%) streak=%d/%d people=%d vehicles=%d",
                 self.config.id, label, violence_score * 100,
                 consecutive_violence, required_hits,
+                counts.get("people", 0), counts.get("vehicles", 0),
             )
 
             self._status[self.config.id] = {
@@ -141,9 +158,35 @@ class CameraPipeline:
                 "violence_score": round(violence_score, 4),
                 "streak": consecutive_violence,
                 "required": required_hits,
+                "counts": counts,
+                "objects": objects,
                 "last_update": time.time(),
             }
 
             self.clip_recorder.on_detection(is_confirmed, confidence)
 
         logger.info("Camera %s: analysis loop stopped", self.config.id)
+
+    def _track_objects(self, frame) -> tuple[list[dict], dict]:
+        """Run people/vehicle tracking; returns (objects, counts) for the status feed."""
+        if self._tracker is None:
+            return [], {}
+        try:
+            tracked = self._tracker.update(frame)
+        except Exception:
+            logger.exception(
+                "Camera %s: object tracking failed, disabling it", self.config.id
+            )
+            self._tracker = None
+            return [], {}
+        objects = [
+            {
+                "track_id": t.track_id,
+                "category": t.category,
+                "label": t.label,
+                "confidence": round(t.confidence, 3),
+                "box": [round(v, 1) for v in t.box],
+            }
+            for t in tracked
+        ]
+        return objects, self._tracker.counts
