@@ -1,0 +1,79 @@
+{
+  "info": {
+    "name": "WatchDogAI",
+    "description": "AI-powered smart security system REST API. Set the `base_url` variable (default http://localhost:8000) and, when API_TOKEN is configured on the server, the `api_token` variable — every request sends it as the X-API-Token header.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000" },
+    { "key": "api_token", "value": "" }
+  ],
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "X-API-Token" },
+      { "key": "value", "value": "{{api_token}}" },
+      { "key": "in", "value": "header" }
+    ]
+  },
+  "item": [
+    {
+      "name": "System status",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/status",
+        "description": "Overall system state (active / degraded / inactive), per-camera health and latest detection results, and the total alert count."
+      }
+    },
+    {
+      "name": "List cameras",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/cameras",
+        "description": "Configured cameras with online/healthy flags and source type."
+      }
+    },
+    {
+      "name": "Live people/vehicle counts",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/counts",
+        "description": "Per camera: currently visible people/vehicles and cumulative unique counts."
+      }
+    },
+    {
+      "name": "List alerts",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{base_url}}/api/alerts?limit=50&offset=0",
+          "host": ["{{base_url}}"],
+          "path": ["api", "alerts"],
+          "query": [
+            { "key": "limit", "value": "50" },
+            { "key": "offset", "value": "0" },
+            { "key": "status", "value": "new", "disabled": true },
+            { "key": "camera_id", "value": "cam-north", "disabled": true }
+          ]
+        },
+        "description": "Paginated alert list, newest first. Optional filters: status (new/reviewed/dismissed) and camera_id. Each alert has id, timestamp, confidence, clip_path, camera_id, alert_type (violence/loitering/running/anomalous_movement), status."
+      }
+    },
+    {
+      "name": "Delete alert",
+      "request": {
+        "method": "DELETE",
+        "url": "{{base_url}}/api/alerts/1",
+        "description": "Deletes the alert and its MP4 clip from disk. Returns 404 when the alert does not exist."
+      }
+    },
+    {
+      "name": "Live video feed (MJPEG)",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/video_feed/cam-north",
+        "description": "Endless multipart/x-mixed-replace MJPEG stream with tracked-object overlay. Best viewed in a browser <img> tag; Postman will keep loading."
+      }
+    }
+  ]
+}

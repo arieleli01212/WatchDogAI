@@ -3,16 +3,10 @@
 from __future__ import annotations
 
 import logging
-import os
-import threading
-import time
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
-import numpy as np
-import pytest
-
-from src.config import Settings
-from main import setup_logging, detection_loop
+from src.config import CameraConfig, Settings
+from main import setup_logging
 
 
 class TestSetupLogging:
@@ -48,7 +42,7 @@ class TestSetupLogging:
         original_handlers = root.handlers[:]
         root.handlers.clear()
         try:
-            logger = setup_logging(settings)
+            setup_logging(settings)
             assert logging.getLogger().level == logging.WARNING
         finally:
             for h in root.handlers[:]:
@@ -74,223 +68,138 @@ class TestSetupLogging:
             root.handlers = original_handlers
 
 
-class TestMainComponentsInitialize:
-    """Verify main() initializes all components with correct settings."""
+class TestMain:
+    """Verify main() builds one pipeline per camera and wires shared components."""
 
     @patch("main.uvicorn")
     @patch("main.create_app")
+    @patch("main.CameraPipeline")
     @patch("main.AlertManager")
     @patch("main.ViolenceDetector")
-    @patch("main.Camera")
     @patch("main.setup_logging")
     @patch("main.get_settings")
-    def test_main_components_initialize(
+    def test_main_builds_pipeline_per_camera(
         self,
         mock_get_settings,
         mock_setup_logging,
-        mock_camera,
-        mock_detector,
-        mock_alert_manager,
+        mock_detector_cls,
+        mock_alert_manager_cls,
+        mock_pipeline_cls,
         mock_create_app,
         mock_uvicorn,
     ):
-        """main() should create Camera, ViolenceDetector, AlertManager with settings."""
         settings = Settings(
-            camera_source=0,
-            clip_length=16,
-            model_path="models/test.pt",
+            cameras=(
+                CameraConfig(id="cam-north", source=0),
+                CameraConfig(id="cam-south", source=1),
+            ),
             dashboard_port=8000,
         )
         mock_get_settings.return_value = settings
-        mock_logger = MagicMock()
-        mock_setup_logging.return_value = mock_logger
+        mock_setup_logging.return_value = MagicMock()
+        mock_create_app.return_value = MagicMock()
+        mock_uvicorn.run = MagicMock()  # returns immediately -> main() shuts down
 
-        mock_app = MagicMock()
-        mock_create_app.return_value = mock_app
+        from main import main
+        main()
 
-        # uvicorn.run will be called; just let it return immediately
+        # One pipeline per configured camera, all started and cleaned up
+        assert mock_pipeline_cls.call_count == 2
+        camera_ids = [
+            call.kwargs["config"].id for call in mock_pipeline_cls.call_args_list
+        ]
+        assert camera_ids == ["cam-north", "cam-south"]
+
+        pipeline = mock_pipeline_cls.return_value
+        assert pipeline.start.call_count == 2
+        assert pipeline.join.call_count == 2
+        assert pipeline.release.call_count == 2
+
+        # Shared components created once
+        mock_detector_cls.assert_called_once()
+        mock_alert_manager_cls.assert_called_once_with(settings)
+        mock_create_app.assert_called_once_with(settings)
+        mock_uvicorn.run.assert_called_once()
+
+    @patch("main.TelemetryLoop")
+    @patch("main.MqttGatewayClient")
+    @patch("main.ControlCenterNotifier")
+    @patch("main.uvicorn")
+    @patch("main.create_app")
+    @patch("main.CameraPipeline")
+    @patch("main.AlertManager")
+    @patch("main.ViolenceDetector")
+    @patch("main.setup_logging")
+    @patch("main.get_settings")
+    def test_main_wires_outbound_notifiers(
+        self,
+        mock_get_settings,
+        mock_setup_logging,
+        mock_detector_cls,
+        mock_alert_manager_cls,
+        mock_pipeline_cls,
+        mock_create_app,
+        mock_uvicorn,
+        mock_notifier_cls,
+        mock_gateway_cls,
+        mock_telemetry_cls,
+    ):
+        settings = Settings(
+            cameras=(CameraConfig(id="cam0", source=0),),
+            control_center_url="http://control-center/api/alerts",
+            control_center_api_key="key",
+            mqtt_host="gateway.campus",
+        )
+        mock_get_settings.return_value = settings
+        mock_setup_logging.return_value = MagicMock()
+        mock_create_app.return_value = MagicMock()
         mock_uvicorn.run = MagicMock()
 
         from main import main
         main()
 
-        mock_camera.assert_called_once_with(
-            source=settings.camera_source,
-            clip_length=settings.clip_length,
+        mock_notifier_cls.assert_called_once_with(
+            url="http://control-center/api/alerts", api_key="key"
         )
-        mock_detector.assert_called_once_with(model_path=settings.model_path)
-        mock_alert_manager.assert_called_once_with(settings)
-        mock_create_app.assert_called_once()
-        mock_uvicorn.run.assert_called_once()
+        mock_gateway_cls.assert_called_once()
+        manager = mock_alert_manager_cls.return_value
+        assert manager.add_notifier.call_count == 2
 
+        mock_telemetry_cls.assert_called_once()
+        mock_telemetry_cls.return_value.start.assert_called_once()
 
-class TestDetectionLoop:
-    """detection_loop should read frames, run inference, and trigger alerts."""
+        # Shutdown releases the outbound channels
+        mock_notifier_cls.return_value.close.assert_called_once()
+        mock_gateway_cls.return_value.close.assert_called_once()
 
-    def test_detection_loop_processes_frames(self):
-        """After clip_length frames, detector.predict should be called."""
-        clip_length = 4
-        fake_frame = np.zeros((224, 224, 3), dtype=np.uint8)
-        fake_clip = np.stack([fake_frame] * clip_length)
+    @patch("main.uvicorn")
+    @patch("main.create_app")
+    @patch("main.CameraPipeline")
+    @patch("main.AlertManager")
+    @patch("main.ViolenceDetector")
+    @patch("main.setup_logging")
+    @patch("main.get_settings")
+    def test_main_registers_cameras_on_app_state(
+        self,
+        mock_get_settings,
+        mock_setup_logging,
+        mock_detector_cls,
+        mock_alert_manager_cls,
+        mock_pipeline_cls,
+        mock_create_app,
+        mock_uvicorn,
+    ):
+        settings = Settings(cameras=(CameraConfig(id="cam0", source=0),))
+        mock_get_settings.return_value = settings
+        mock_setup_logging.return_value = MagicMock()
 
-        mock_camera = MagicMock()
-        # Return fake frames for clip_length frames, then stop
-        call_count = 0
+        app = MagicMock()
+        app.state.cameras = {}
+        mock_create_app.return_value = app
+        mock_uvicorn.run = MagicMock()
 
-        def read_side_effect():
-            nonlocal call_count
-            call_count += 1
-            if call_count <= clip_length:
-                return True, fake_frame
-            return False, None
+        from main import main
+        main()
 
-        mock_camera.read_frame.side_effect = read_side_effect
-        mock_camera.get_clip.return_value = fake_clip
-
-        mock_detector = MagicMock()
-        mock_detector.predict.return_value = ("normal", 0.95)
-
-        mock_alert_manager = MagicMock()
-
-        settings = Settings(clip_length=clip_length)
-
-        mock_logger = MagicMock()
-        stop_event = threading.Event()
-
-        # Run detection loop in a thread; it will stop after frames run out
-        # and read_frame returns False (then it sleeps, we stop it)
-        def run_loop():
-            detection_loop(
-                mock_camera, mock_detector, mock_alert_manager,
-                settings, mock_logger, stop_event,
-            )
-
-        thread = threading.Thread(target=run_loop, daemon=True)
-        thread.start()
-
-        # Wait a bit for the loop to process frames
-        time.sleep(1.0)
-        stop_event.set()
-        thread.join(timeout=3)
-
-        # Verify frames were read and added
-        assert mock_camera.read_frame.call_count >= clip_length
-        assert mock_camera.add_frame.call_count == clip_length
-
-        # Verify inference was run
-        mock_detector.predict.assert_called_once_with(fake_clip)
-
-        # Verify alert processing was called
-        mock_alert_manager.on_detection.assert_called_once_with(
-            "normal", 0.95, fake_frame,
-        )
-
-    def test_detection_loop_skips_when_clip_not_ready(self):
-        """If get_clip returns None, predict should not be called."""
-        clip_length = 4
-        fake_frame = np.zeros((224, 224, 3), dtype=np.uint8)
-
-        mock_camera = MagicMock()
-        call_count = 0
-
-        def read_side_effect():
-            nonlocal call_count
-            call_count += 1
-            if call_count <= clip_length:
-                return True, fake_frame
-            return False, None
-
-        mock_camera.read_frame.side_effect = read_side_effect
-        mock_camera.get_clip.return_value = None  # Buffer not full
-
-        mock_detector = MagicMock()
-        mock_alert_manager = MagicMock()
-        settings = Settings(clip_length=clip_length)
-        mock_logger = MagicMock()
-        stop_event = threading.Event()
-
-        thread = threading.Thread(
-            target=detection_loop,
-            args=(mock_camera, mock_detector, mock_alert_manager,
-                  settings, mock_logger, stop_event),
-            daemon=True,
-        )
-        thread.start()
-        time.sleep(1.0)
-        stop_event.set()
-        thread.join(timeout=3)
-
-        # predict should never have been called
-        mock_detector.predict.assert_not_called()
-
-    def test_detection_loop_updates_app_state(self):
-        """When _app_state is set, detector_status should be updated."""
-        clip_length = 4
-        fake_frame = np.zeros((224, 224, 3), dtype=np.uint8)
-        fake_clip = np.stack([fake_frame] * clip_length)
-
-        mock_camera = MagicMock()
-        call_count = 0
-
-        def read_side_effect():
-            nonlocal call_count
-            call_count += 1
-            if call_count <= clip_length:
-                return True, fake_frame
-            return False, None
-
-        mock_camera.read_frame.side_effect = read_side_effect
-        mock_camera.get_clip.return_value = fake_clip
-
-        mock_detector = MagicMock()
-        mock_detector.predict.return_value = ("violence", 0.92)
-
-        mock_alert_manager = MagicMock()
-        settings = Settings(clip_length=clip_length)
-        mock_logger = MagicMock()
-        stop_event = threading.Event()
-
-        # Set up app state
-        mock_app_state = MagicMock()
-        detection_loop._app_state = mock_app_state
-
-        thread = threading.Thread(
-            target=detection_loop,
-            args=(mock_camera, mock_detector, mock_alert_manager,
-                  settings, mock_logger, stop_event),
-            daemon=True,
-        )
-        thread.start()
-        time.sleep(1.0)
-        stop_event.set()
-        thread.join(timeout=3)
-
-        # Verify app state was updated
-        assert mock_app_state.detector_status is not None
-
-        # Clean up
-        detection_loop._app_state = None
-
-    def test_detection_loop_stops_on_event(self):
-        """Setting the stop_event should cause the loop to exit."""
-        mock_camera = MagicMock()
-        mock_camera.read_frame.return_value = (False, None)
-
-        mock_detector = MagicMock()
-        mock_alert_manager = MagicMock()
-        settings = Settings(clip_length=16)
-        mock_logger = MagicMock()
-        stop_event = threading.Event()
-
-        thread = threading.Thread(
-            target=detection_loop,
-            args=(mock_camera, mock_detector, mock_alert_manager,
-                  settings, mock_logger, stop_event),
-            daemon=True,
-        )
-        thread.start()
-        time.sleep(0.3)
-        stop_event.set()
-        thread.join(timeout=3)
-
-        assert not thread.is_alive()
+        assert "cam0" in app.state.cameras
+        assert app.state.alert_manager is mock_alert_manager_cls.return_value

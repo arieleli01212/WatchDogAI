@@ -1,6 +1,6 @@
-"""Detector module: violence detection model and preprocessing."""
+"""Detector module: violence classification and people/vehicle tracking."""
 
 from src.detector.model import ViolenceDetector
-from src.detector.preprocessing import preprocess_clip
+from src.detector.objects import ObjectTracker, TrackedObject
 
-__all__ = ["ViolenceDetector", "preprocess_clip"]
+__all__ = ["ViolenceDetector", "ObjectTracker", "TrackedObject"]

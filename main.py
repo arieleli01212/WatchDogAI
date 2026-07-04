@@ -1,26 +1,24 @@
-"""WatchDogAI - Real-time violence detection system."""
+"""WatchDogAI - AI-powered smart security system entry point."""
 
 import logging
-import threading
-import time
+import os
 import signal
+import threading
 
-import cv2
 import uvicorn
 
 from src.config import get_settings
-from src.capture.camera import Camera
 from src.detector.model import ViolenceDetector
 from src.alerts.manager import AlertManager
-from src.alerts.clip_recorder import ClipRecorder
+from src.alerts.notifier import ControlCenterNotifier
+from src.mqtt.client import MqttGatewayClient, TelemetryLoop
+from src.pipeline import CameraPipeline
 from src.dashboard.app import create_app
 
 
 def setup_logging(settings):
     """Configure basic logging."""
     log_dir = settings.log_dir
-    # Ensure log directory exists
-    import os
     os.makedirs(log_dir, exist_ok=True)
 
     logging.basicConfig(
@@ -34,104 +32,49 @@ def setup_logging(settings):
     return logging.getLogger("watchdog")
 
 
-def capture_loop(camera, clip_recorder, logger, stop_event):
-    """Continuously read frames from the camera at full speed."""
-    logger.info("Capture loop started")
-    while not stop_event.is_set():
-        success, frame = camera.read_frame()
-        if not success:
-            # For video files: loop back to the beginning
-            if isinstance(camera._source, str):
-                camera._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                logger.info("Video ended, looping...")
-                continue
-            time.sleep(0.03)
-            continue
-        camera.add_frame(frame)
-        clip_recorder.add_frame(frame)
-        # Pace video files to their native FPS
-        if isinstance(camera._source, str) and camera.fps > 0:
-            time.sleep(1.0 / camera.fps)
-    logger.info("Capture loop stopped")
-
-
-def detection_loop(camera, detector, clip_recorder, settings, logger, stop_event):
-    """Run inference on the latest frame for real-time detection.
-
-    Uses temporal smoothing: only triggers an alert after N consecutive
-    high-confidence violence detections. This eliminates false positives
-    while keeping detection responsive.
-    """
-    logger.info("Detection loop started")
-    consecutive_violence = 0
-    required_hits = settings.consecutive_hits
-
-    while not stop_event.is_set():
-        frame = camera.get_latest_frame()
-        if frame is None:
-            time.sleep(0.05)
-            continue
-
-        label, confidence = detector.predict_frame(frame)
-
-        # Compute the violence probability regardless of label
-        violence_pct = confidence if label == "violence" else 1.0 - confidence
-
-        # Track consecutive violence detections above threshold
-        if label == "violence" and confidence >= settings.confidence_threshold:
-            consecutive_violence += 1
-        else:
-            consecutive_violence = 0
-
-        # Determine the smoothed label for display and alerting
-        is_confirmed_violence = consecutive_violence >= required_hits
-        smoothed_label = "violence" if is_confirmed_violence else "normal"
-
-        logger.debug(
-            "Detection: %s (violence=%.1f%%) streak=%d/%d -> %s",
-            label, violence_pct * 100, consecutive_violence, required_hits, smoothed_label,
-        )
-
-        # Update dashboard status
-        app_state = getattr(detection_loop, '_app_state', None)
-        if app_state:
-            app_state.detector_status = {
-                "label": smoothed_label,
-                "confidence": confidence,
-                "violence_score": round(violence_pct, 4),
-                "streak": consecutive_violence,
-                "required": required_hits,
-                "last_update": time.time(),
-            }
-
-        # Signal clip recorder with the detection result
-        clip_recorder.on_detection(is_confirmed_violence, confidence)
-
-    logger.info("Detection loop stopped")
-
-
 def main():
     settings = get_settings()
     logger = setup_logging(settings)
 
     logger.info("WatchDogAI starting...")
-    logger.info(f"Camera source: {settings.camera_source}")
+    logger.info(
+        "Cameras: %s",
+        ", ".join(f"{c.id} ({c.source})" for c in settings.cameras),
+    )
     logger.info(f"Confidence threshold: {settings.confidence_threshold}")
     logger.info(f"Dashboard port: {settings.dashboard_port}")
 
-    # Initialize components
-    camera = Camera(source=settings.camera_source, clip_length=settings.clip_length)
+    # Shared components: one model instance and one alert manager serve all cameras
     detector = ViolenceDetector()
     alert_manager = AlertManager(settings)
-    clip_recorder = ClipRecorder(
-        settings=settings,
-        alert_manager=alert_manager,
-        fps=camera.fps if camera.fps > 0 else 30.0,
-    )
+
+    # Outbound alerting: HTTP push to the municipal control center
+    notifier = None
+    if settings.control_center_url:
+        notifier = ControlCenterNotifier(
+            url=settings.control_center_url,
+            api_key=settings.control_center_api_key,
+        )
+        alert_manager.add_notifier(notifier)
+        logger.info("Control-center notifier -> %s", settings.control_center_url)
+
+    # Outbound alerting + telemetry over the LoRa gateway (MQTT)
+    gateway = None
+    if settings.mqtt_host:
+        try:
+            gateway = MqttGatewayClient(
+                host=settings.mqtt_host,
+                port=settings.mqtt_port,
+                username=settings.mqtt_username,
+                password=settings.mqtt_password,
+                base_topic=settings.mqtt_base_topic,
+            )
+            alert_manager.add_notifier(gateway)
+        except Exception:
+            logger.exception("MQTT gateway unavailable, continuing without it")
 
     # Create dashboard app and wire components
-    app = create_app()
-    app.state.camera = camera
+    app = create_app(settings)
     app.state.alert_manager = alert_manager
 
     # Setup graceful shutdown
@@ -144,26 +87,34 @@ def main():
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
 
-    # Store app state reference for detection loop
-    detection_loop._app_state = app.state
+    # One pipeline (capture + analysis threads) per configured camera
+    pipelines = []
+    for camera_config in settings.cameras:
+        pipeline = CameraPipeline(
+            config=camera_config,
+            settings=settings,
+            detector=detector,
+            alert_manager=alert_manager,
+            status_registry=app.state.camera_status,
+            stop_event=stop_event,
+        )
+        app.state.cameras[camera_config.id] = pipeline.camera
+        pipelines.append(pipeline)
 
-    # Start capture loop - reads frames continuously at full speed
-    capture_thread = threading.Thread(
-        target=capture_loop,
-        args=(camera, clip_recorder, logger, stop_event),
-        daemon=True,
-    )
-    capture_thread.start()
-    logger.info("Capture thread started")
+    for pipeline in pipelines:
+        pipeline.start()
+        logger.info("Pipeline started for camera %s", pipeline.config.id)
 
-    # Start detection loop - runs inference periodically
-    detection_thread = threading.Thread(
-        target=detection_loop,
-        args=(camera, detector, clip_recorder, settings, logger, stop_event),
-        daemon=True,
-    )
-    detection_thread.start()
-    logger.info("Detection thread started")
+    # Periodic camera-health telemetry over the gateway
+    if gateway is not None:
+        TelemetryLoop(
+            gateway=gateway,
+            cameras=app.state.cameras,
+            status_registry=app.state.camera_status,
+            interval=settings.telemetry_interval,
+            stop_event=stop_event,
+            health_max_age=settings.camera_health_max_age,
+        ).start()
 
     # Start dashboard (blocks until shutdown)
     try:
@@ -171,9 +122,13 @@ def main():
     finally:
         logger.info("Shutting down...")
         stop_event.set()
-        capture_thread.join(timeout=5)
-        detection_thread.join(timeout=5)
-        camera.release()
+        for pipeline in pipelines:
+            pipeline.join(timeout=5)
+            pipeline.release()
+        if notifier is not None:
+            notifier.close()
+        if gateway is not None:
+            gateway.close()
         logger.info("WatchDogAI stopped")
 
 
