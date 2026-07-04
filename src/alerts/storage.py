@@ -1,10 +1,41 @@
-"""SQLite storage backend for detection alerts."""
+"""Alert storage backends: SQLite and a factory that prefers MongoDB."""
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def create_alert_storage(settings):
+    """Build the alert storage backend selected by ``settings.db_backend``.
+
+    - ``mongodb``: MongoDB only; raises when the server is unreachable.
+    - ``sqlite``: local SQLite file.
+    - ``auto`` (default): MongoDB when reachable, otherwise fall back to
+      SQLite so the system keeps alerting even without a database server.
+    """
+    backend = settings.db_backend.lower()
+    if backend in ("mongodb", "auto"):
+        try:
+            from src.alerts.mongo_storage import MongoAlertStorage
+
+            storage = MongoAlertStorage(
+                uri=settings.mongodb_uri, db_name=settings.mongodb_db
+            )
+            logger.info("Alert storage: MongoDB at %s", settings.mongodb_uri)
+            return storage
+        except Exception as exc:
+            if backend == "mongodb":
+                raise
+            logger.warning(
+                "MongoDB unreachable (%s) — falling back to SQLite at %s",
+                exc, settings.db_path,
+            )
+    return AlertStorage(settings.db_path)
 
 
 class AlertStorage:

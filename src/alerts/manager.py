@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.alerts.storage import AlertStorage
+from src.alerts.storage import create_alert_storage
 from src.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class AlertManager:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self.storage = AlertStorage(settings.db_path)
+        self.storage = create_alert_storage(settings)
         self._last_alert_times: dict[str, float] = {}
         self._notifiers: list = []
 

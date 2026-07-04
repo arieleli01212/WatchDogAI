@@ -169,6 +169,7 @@ async def test_api_alerts_returns_list(client):
 @pytest.mark.anyio
 async def test_api_alerts_with_alert_manager(app, client, tmp_path):
     settings = Settings(
+        db_backend="sqlite",
         db_path=str(tmp_path / "alerts.db"),
         cooldown_seconds=0,
     )
@@ -193,6 +194,7 @@ async def test_api_alerts_with_alert_manager(app, client, tmp_path):
 @pytest.mark.anyio
 async def test_api_delete_alert(app, client, tmp_path):
     settings = Settings(
+        db_backend="sqlite",
         db_path=str(tmp_path / "alerts.db"),
         cooldown_seconds=0,
     )

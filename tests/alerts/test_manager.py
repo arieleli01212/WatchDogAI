@@ -14,6 +14,7 @@ from src.config import Settings
 def settings(tmp_path: Path) -> Settings:
     """Create Settings with temporary paths for testing."""
     return Settings(
+        db_backend="sqlite",
         db_path=str(tmp_path / "test.db"),
         clip_dir=str(tmp_path / "clips"),
         confidence_threshold=0.85,
@@ -65,6 +66,7 @@ class TestOnClipSaved:
 
     def test_zero_cooldown_allows_consecutive_alerts(self, tmp_path: Path):
         settings = Settings(
+            db_backend="sqlite",
             db_path=str(tmp_path / "test2.db"),
             cooldown_seconds=0,
         )
@@ -112,6 +114,7 @@ class TestGetAlerts:
 
     def test_get_alerts_pagination(self, tmp_path: Path):
         settings = Settings(
+            db_backend="sqlite",
             db_path=str(tmp_path / "test3.db"),
             cooldown_seconds=0,
         )
@@ -125,6 +128,7 @@ class TestGetAlerts:
 
     def test_get_alerts_camera_filter(self, tmp_path: Path):
         settings = Settings(
+            db_backend="sqlite",
             db_path=str(tmp_path / "test4.db"),
             cooldown_seconds=0,
         )

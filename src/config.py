@@ -128,6 +128,15 @@ class Settings:
     dashboard_port: int = field(
         default_factory=lambda: int(os.getenv("DASHBOARD_PORT", "8000"))
     )
+    db_backend: str = field(
+        default_factory=lambda: os.getenv("DB_BACKEND", "auto")
+    )
+    mongodb_uri: str = field(
+        default_factory=lambda: os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+    )
+    mongodb_db: str = field(
+        default_factory=lambda: os.getenv("MONGODB_DB", "watchdog")
+    )
     db_path: str = field(
         default_factory=lambda: os.getenv("DB_PATH", "data/watchdog.db")
     )
