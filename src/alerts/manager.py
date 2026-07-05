@@ -1,4 +1,4 @@
-"""Alert manager: coordinates clip saving and storage."""
+"""Alert manager: coordinates clip saving, storage, and notification."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.alerts.storage import AlertStorage
+from src.alerts.storage import create_alert_storage
 from src.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -16,43 +16,79 @@ logger = logging.getLogger(__name__)
 class AlertManager:
     """Orchestrates alert creation from clip events.
 
-    Handles cooldown enforcement, database persistence, and alert deletion.
+    Handles per-camera cooldown enforcement, database persistence, and
+    alert deletion. Notifiers (control-center push, MQTT) can be attached
+    with :meth:`add_notifier` and are invoked for every created alert.
     """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self.storage = AlertStorage(settings.db_path)
-        self._last_alert_time: float | None = None
+        self.storage = create_alert_storage(settings)
+        self._last_alert_times: dict[str, float] = {}
+        self._notifiers: list = []
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def add_notifier(self, notifier) -> None:
+        """Register a notifier with a ``notify(alert: dict, clip_path: str)`` method."""
+        self._notifiers.append(notifier)
 
     def on_clip_saved(
         self,
         confidence: float,
         clip_path: str,
         camera_id: str = "cam0",
+        alert_type: str = "violence",
     ) -> None:
         """Create an alert after a clip has been written to disk."""
-        if self._is_in_cooldown():
+        if self._is_in_cooldown(camera_id):
+            logger.debug("Alert suppressed by cooldown: camera=%s", camera_id)
+            # Suppressed alerts must not leak orphaned clips onto disk
+            self._remove_clip_file(clip_path)
             return
 
         now = datetime.now(tz=timezone.utc)
-        self.storage.save_alert(
-            timestamp=now.isoformat(),
-            confidence=confidence,
-            clip_path=clip_path,
-            camera_id=camera_id,
+        # A database outage must not silence outbound alerting — the
+        # control center still gets notified, just without a stored id
+        alert_id = None
+        try:
+            alert_id = self.storage.save_alert(
+                timestamp=now.isoformat(),
+                confidence=confidence,
+                clip_path=clip_path,
+                camera_id=camera_id,
+                alert_type=alert_type,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist alert (camera=%s) — notifying anyway", camera_id
+            )
+
+        self._last_alert_times[camera_id] = time.monotonic()
+        logger.info(
+            "Alert created: id=%s type=%s camera=%s confidence=%.2f clip=%s",
+            alert_id, alert_type, camera_id, confidence, clip_path,
         )
 
-        self._last_alert_time = time.monotonic()
-        logger.info(
-            "Alert created: camera=%s confidence=%.2f clip=%s",
-            camera_id,
-            confidence,
-            clip_path,
-        )
+        alert = {
+            "id": alert_id,
+            "timestamp": now.isoformat(),
+            "confidence": confidence,
+            "clip_path": clip_path,
+            "camera_id": camera_id,
+            "alert_type": alert_type,
+            "status": "new",
+        }
+        for notifier in self._notifiers:
+            try:
+                notifier.notify(alert, clip_path)
+            except Exception:
+                logger.exception(
+                    "Notifier %s failed for alert %s",
+                    type(notifier).__name__, alert_id,
+                )
 
     def delete_alert(self, alert_id: int) -> bool:
         """Delete an alert and its clip file from disk."""
@@ -60,14 +96,9 @@ class AlertManager:
         if alert is None:
             return False
 
-        # Remove the clip file if it exists
-        clip_file = Path(alert["clip_path"])
-        if clip_file.is_file():
-            clip_file.unlink()
-            logger.info("Deleted clip file: %s", clip_file)
-
+        self._remove_clip_file(alert["clip_path"])
         self.storage.delete_alert(alert_id)
-        logger.info("Deleted alert id=%d", alert_id)
+        logger.info("Deleted alert id=%s", alert_id)
         return True
 
     def get_alerts(
@@ -75,9 +106,20 @@ class AlertManager:
         limit: int = 50,
         offset: int = 0,
         status: str | None = None,
+        camera_id: str | None = None,
     ) -> list[dict]:
         """Delegate to storage."""
-        return self.storage.get_alerts(limit=limit, offset=offset, status=status)
+        return self.storage.get_alerts(
+            limit=limit, offset=offset, status=status, camera_id=camera_id
+        )
+
+    def get_alert_count(
+        self,
+        status: str | None = None,
+        camera_id: str | None = None,
+    ) -> int:
+        """Delegate to storage."""
+        return self.storage.get_alert_count(status=status, camera_id=camera_id)
 
     # ------------------------------------------------------------------
     # Properties
@@ -90,15 +132,40 @@ class AlertManager:
 
     @property
     def last_alert_time(self) -> float | None:
-        """Monotonic timestamp of the most recent alert, or None."""
-        return self._last_alert_time
+        """Monotonic timestamp of the most recent alert across all cameras."""
+        if not self._last_alert_times:
+            return None
+        return max(self._last_alert_times.values())
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _is_in_cooldown(self) -> bool:
-        if self._last_alert_time is None:
+    def _is_in_cooldown(self, camera_id: str) -> bool:
+        last = self._last_alert_times.get(camera_id)
+        if last is None:
             return False
-        elapsed = time.monotonic() - self._last_alert_time
+        elapsed = time.monotonic() - last
         return elapsed < self._settings.cooldown_seconds
+
+    def _remove_clip_file(self, clip_path: str) -> None:
+        """Delete a clip, but only inside the configured clip directory.
+
+        clip_path comes from the database, so a tampered row must never
+        be able to unlink arbitrary files. Deletion failures (e.g. the
+        notifier still streaming the file on Windows) are logged, not
+        raised — the alert row is removed either way.
+        """
+        base = Path(self._settings.clip_dir).resolve()
+        try:
+            target = Path(clip_path).resolve()
+            if not target.is_relative_to(base):
+                logger.warning(
+                    "Refusing to delete clip outside %s: %s", base, clip_path
+                )
+                return
+            if target.is_file():
+                target.unlink()
+                logger.info("Deleted clip file: %s", target)
+        except OSError:
+            logger.warning("Could not delete clip file %s", clip_path, exc_info=True)

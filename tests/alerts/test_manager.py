@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
-from unittest.mock import patch
 
-import numpy as np
 import pytest
 
 from src.alerts.manager import AlertManager
@@ -17,10 +14,11 @@ from src.config import Settings
 def settings(tmp_path: Path) -> Settings:
     """Create Settings with temporary paths for testing."""
     return Settings(
+        db_backend="sqlite",
         db_path=str(tmp_path / "test.db"),
-        snapshot_dir=str(tmp_path / "snapshots"),
+        clip_dir=str(tmp_path / "clips"),
         confidence_threshold=0.85,
-        cooldown_seconds=5,
+        cooldown_seconds=60,
     )
 
 
@@ -32,96 +30,205 @@ def manager(settings: Settings) -> AlertManager:
     mgr.storage.close()
 
 
-@pytest.fixture()
-def fake_frame() -> np.ndarray:
-    """Create a fake BGR image frame."""
-    return np.zeros((480, 640, 3), dtype=np.uint8)
+class TestOnClipSaved:
+    """Alerts should be created when a clip has been saved."""
 
-
-class TestAlertManager:
-    """Tests for AlertManager."""
-
-    def test_violence_above_threshold_creates_alert(
-        self, manager: AlertManager, fake_frame: np.ndarray
-    ):
-        manager.on_detection("violence", 0.92, fake_frame, "cam0")
+    def test_creates_alert(self, manager: AlertManager):
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4", camera_id="cam0")
         assert manager.alert_count == 1
 
-    def test_violence_below_threshold_ignored(
-        self, manager: AlertManager, fake_frame: np.ndarray
-    ):
-        manager.on_detection("violence", 0.50, fake_frame, "cam0")
-        assert manager.alert_count == 0
-
-    def test_normal_label_ignored(
-        self, manager: AlertManager, fake_frame: np.ndarray
-    ):
-        manager.on_detection("normal", 0.95, fake_frame, "cam0")
-        assert manager.alert_count == 0
-
-    def test_cooldown_prevents_duplicate_alerts(
-        self, settings: Settings, fake_frame: np.ndarray
-    ):
-        # Use a short cooldown for testing
-        short_settings = Settings(
-            db_path=settings.db_path,
-            snapshot_dir=settings.snapshot_dir,
-            confidence_threshold=0.85,
-            cooldown_seconds=60,
-        )
-        mgr = AlertManager(short_settings)
-
-        mgr.on_detection("violence", 0.92, fake_frame, "cam0")
-        mgr.on_detection("violence", 0.95, fake_frame, "cam0")
-
-        assert mgr.alert_count == 1
-        mgr.storage.close()
-
-    def test_cooldown_expires_allows_new_alert(
-        self, fake_frame: np.ndarray, tmp_path: Path
-    ):
-        short_settings = Settings(
-            db_path=str(tmp_path / "test2.db"),
-            snapshot_dir=str(tmp_path / "snapshots2"),
-            confidence_threshold=0.85,
-            cooldown_seconds=0,
-        )
-        mgr = AlertManager(short_settings)
-
-        mgr.on_detection("violence", 0.92, fake_frame, "cam0")
-        mgr.on_detection("violence", 0.95, fake_frame, "cam0")
-
-        assert mgr.alert_count == 2
-        mgr.storage.close()
-
-    def test_snapshot_saved_as_jpeg(
-        self, manager: AlertManager, fake_frame: np.ndarray, settings: Settings
-    ):
-        manager.on_detection("violence", 0.92, fake_frame, "cam0")
-
-        snapshot_dir = Path(settings.snapshot_dir)
-        jpg_files = list(snapshot_dir.rglob("*.jpg"))
-        assert len(jpg_files) == 1
-        assert jpg_files[0].suffix == ".jpg"
-        assert "cam0" in jpg_files[0].name
-
-    def test_alert_saved_to_database(
-        self, manager: AlertManager, fake_frame: np.ndarray
-    ):
-        manager.on_detection("violence", 0.92, fake_frame, "cam0")
+    def test_alert_fields_persisted(self, manager: AlertManager):
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4", camera_id="cam0")
 
         alerts = manager.get_alerts()
         assert len(alerts) == 1
         assert alerts[0]["confidence"] == 0.92
+        assert alerts[0]["clip_path"] == "clips/a.mp4"
         assert alerts[0]["camera_id"] == "cam0"
         assert alerts[0]["status"] == "new"
-        assert alerts[0]["snapshot_path"].endswith(".jpg")
+
+    def test_alert_type_persisted(self, manager: AlertManager):
+        manager.on_clip_saved(
+            confidence=0.7, clip_path="clips/l.mp4",
+            camera_id="cam0", alert_type="abnormal_behavior",
+        )
+        assert manager.get_alerts()[0]["alert_type"] == "abnormal_behavior"
+
+    def test_cooldown_prevents_duplicate_alerts(self, manager: AlertManager):
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4")
+        manager.on_clip_saved(confidence=0.95, clip_path="clips/b.mp4")
+        assert manager.alert_count == 1
+
+    def test_cooldown_is_per_camera(self, manager: AlertManager):
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4", camera_id="cam0")
+        manager.on_clip_saved(confidence=0.95, clip_path="clips/b.mp4", camera_id="cam1")
+        assert manager.alert_count == 2
+
+    def test_zero_cooldown_allows_consecutive_alerts(self, tmp_path: Path):
+        settings = Settings(
+            db_backend="sqlite",
+            db_path=str(tmp_path / "test2.db"),
+            cooldown_seconds=0,
+        )
+        mgr = AlertManager(settings)
+        mgr.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4")
+        mgr.on_clip_saved(confidence=0.95, clip_path="clips/b.mp4")
+        assert mgr.alert_count == 2
+        mgr.storage.close()
 
     def test_last_alert_time_initially_none(self, manager: AlertManager):
         assert manager.last_alert_time is None
 
-    def test_last_alert_time_updated_after_detection(
-        self, manager: AlertManager, fake_frame: np.ndarray
-    ):
-        manager.on_detection("violence", 0.92, fake_frame, "cam0")
+    def test_last_alert_time_updated_after_alert(self, manager: AlertManager):
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4")
         assert manager.last_alert_time is not None
+
+
+class TestDeleteAlert:
+    """delete_alert should remove the DB row and the clip file."""
+
+    def test_delete_removes_alert_and_clip(self, manager: AlertManager, settings: Settings):
+        clip_dir = Path(settings.clip_dir)
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        clip_file = clip_dir / "clip.mp4"
+        clip_file.write_bytes(b"fake video data")
+
+        manager.on_clip_saved(confidence=0.92, clip_path=str(clip_file))
+        alert_id = manager.get_alerts()[0]["id"]
+
+        assert manager.delete_alert(alert_id) is True
+        assert manager.alert_count == 0
+        assert not clip_file.exists()
+
+    def test_delete_refuses_paths_outside_clip_dir(
+        self, manager: AlertManager, tmp_path: Path
+    ):
+        """A tampered clip_path must never unlink files outside the clip dir."""
+        outside = tmp_path / "important.txt"
+        outside.write_text("do not delete")
+
+        manager.on_clip_saved(confidence=0.92, clip_path=str(outside))
+        alert_id = manager.get_alerts()[0]["id"]
+
+        assert manager.delete_alert(alert_id) is True  # row removed
+        assert outside.exists()  # file preserved
+
+    def test_delete_with_missing_clip_still_removes_alert(self, manager: AlertManager):
+        manager.on_clip_saved(confidence=0.92, clip_path="does/not/exist.mp4")
+        alert_id = manager.get_alerts()[0]["id"]
+
+        assert manager.delete_alert(alert_id) is True
+        assert manager.alert_count == 0
+
+    def test_delete_nonexistent_returns_false(self, manager: AlertManager):
+        assert manager.delete_alert(9999) is False
+
+
+class TestResilience:
+    """Review findings: storage failures and cooldown-orphaned clips."""
+
+    def test_storage_failure_still_notifies(self, manager: AlertManager):
+        from unittest.mock import MagicMock
+
+        notifier = MagicMock()
+        manager.add_notifier(notifier)
+        manager.storage.save_alert = MagicMock(side_effect=RuntimeError("db down"))
+
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4")
+
+        notifier.notify.assert_called_once()
+        alert, _ = notifier.notify.call_args.args
+        assert alert["id"] is None  # not persisted, but still delivered
+
+    def test_cooldown_suppression_removes_orphaned_clip(
+        self, manager: AlertManager, settings: Settings
+    ):
+        clip_dir = Path(settings.clip_dir)
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        first = clip_dir / "first.mp4"
+        second = clip_dir / "second.mp4"
+        first.write_bytes(b"a")
+        second.write_bytes(b"b")
+
+        manager.on_clip_saved(confidence=0.92, clip_path=str(first))
+        manager.on_clip_saved(confidence=0.95, clip_path=str(second))  # suppressed
+
+        assert manager.alert_count == 1
+        assert first.exists()       # belongs to the stored alert
+        assert not second.exists()  # suppressed alert's clip cleaned up
+
+
+class TestGetAlerts:
+    """get_alerts should delegate to storage with pagination and filters."""
+
+    def test_get_alerts_pagination(self, tmp_path: Path):
+        settings = Settings(
+            db_backend="sqlite",
+            db_path=str(tmp_path / "test3.db"),
+            cooldown_seconds=0,
+        )
+        mgr = AlertManager(settings)
+        for i in range(5):
+            mgr.on_clip_saved(confidence=0.9, clip_path=f"clips/{i}.mp4")
+
+        assert len(mgr.get_alerts(limit=2)) == 2
+        assert len(mgr.get_alerts(limit=10, offset=4)) == 1
+        mgr.storage.close()
+
+    def test_get_alerts_camera_filter(self, tmp_path: Path):
+        settings = Settings(
+            db_backend="sqlite",
+            db_path=str(tmp_path / "test4.db"),
+            cooldown_seconds=0,
+        )
+        mgr = AlertManager(settings)
+        mgr.on_clip_saved(confidence=0.9, clip_path="a.mp4", camera_id="cam0")
+        mgr.on_clip_saved(confidence=0.9, clip_path="b.mp4", camera_id="cam1")
+
+        cam1_alerts = mgr.get_alerts(camera_id="cam1")
+        assert len(cam1_alerts) == 1
+        assert cam1_alerts[0]["camera_id"] == "cam1"
+        assert mgr.get_alert_count(camera_id="cam0") == 1
+        mgr.storage.close()
+
+
+class TestNotifiers:
+    """Registered notifiers should receive every created alert."""
+
+    def test_notifier_called_with_alert(self, manager: AlertManager):
+        from unittest.mock import MagicMock
+
+        notifier = MagicMock()
+        manager.add_notifier(notifier)
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4", camera_id="cam0")
+
+        notifier.notify.assert_called_once()
+        alert, clip_path = notifier.notify.call_args.args
+        assert alert["camera_id"] == "cam0"
+        assert alert["alert_type"] == "violence"
+        assert alert["confidence"] == 0.92
+        assert clip_path == "clips/a.mp4"
+
+    def test_failing_notifier_does_not_break_alerting(self, manager: AlertManager):
+        from unittest.mock import MagicMock
+
+        bad = MagicMock()
+        bad.notify.side_effect = RuntimeError("boom")
+        good = MagicMock()
+        manager.add_notifier(bad)
+        manager.add_notifier(good)
+
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4")
+
+        assert manager.alert_count == 1
+        good.notify.assert_called_once()
+
+    def test_notifier_not_called_during_cooldown(self, manager: AlertManager):
+        from unittest.mock import MagicMock
+
+        notifier = MagicMock()
+        manager.add_notifier(notifier)
+        manager.on_clip_saved(confidence=0.92, clip_path="clips/a.mp4")
+        manager.on_clip_saved(confidence=0.95, clip_path="clips/b.mp4")
+
+        assert notifier.notify.call_count == 1

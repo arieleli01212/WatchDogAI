@@ -4,14 +4,46 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "watchdogai"
-version = "0.1.0"
+version = "1.0.0"
+description = "AI-powered smart security system: multi-camera violence detection, people/vehicle tracking and counting, abnormal-behavior alerts with clips to a municipal control center"
 requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "timm>=1.0",
+    "transformers>=4.40",
+    "safetensors>=0.4",
+    "huggingface-hub>=0.20",
+    "ultralytics>=8.0",
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+    "pillow>=10.0",
+    "pandas>=2.0",
+    "scikit-learn>=1.4",
+    "pymongo>=4.6",
+    "paho-mqtt>=2.0",
+    "requests>=2.31",
+    "fastapi>=0.104",
+    "uvicorn>=0.24",
+    "jinja2>=3.1",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "httpx>=0.25",
+    "mongomock>=4.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+
+[tool.setuptools]
+py-modules = ["main"]
 
 [tool.setuptools.packages.find]
 where = ["."]
