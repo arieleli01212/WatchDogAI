@@ -6,49 +6,85 @@
 <style>
     .camera-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-        gap: 1.25rem;
+        grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+        gap: 1.5rem;
     }
 
     .camera-card {
-        background: #161822;
-        border: 1px solid #2a2d3a;
-        border-radius: 0.5rem;
+        max-width: 640px;
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
         overflow: hidden;
         display: flex;
         flex-direction: column;
+        box-shadow: var(--shadow-md);
+        transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+    }
+
+    .camera-card:hover {
+        border-color: var(--border-default);
+        box-shadow: var(--shadow-lg);
+        transform: translateY(-2px);
+    }
+
+    /* Unmistakable escalation: violence state lifts the whole card, not just the status bar */
+    .camera-card:has(.status-violence) {
+        border-color: rgba(242, 73, 92, 0.4);
+        box-shadow: var(--shadow-glow-danger);
     }
 
     .camera-header {
         display: flex;
         align-items: center;
         gap: 0.75rem;
-        padding: 0.6rem 1rem;
-        border-bottom: 1px solid #2a2d3a;
+        padding: 1rem 1.1rem 0.75rem;
     }
 
-    .camera-header .cam-name { font-weight: 600; }
+    .camera-header .cam-name {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        letter-spacing: -0.005em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
     .camera-header .cam-health {
         margin-left: auto;
-        font-size: 0.8rem;
-        color: #9ca3af;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--text-secondary);
+        padding: 3px 0.55rem 3px 3px;
+        border-radius: 999px;
+        background: var(--bg-inset);
+        flex-shrink: 0;
     }
 
     .health-dot {
         display: inline-block;
-        width: 0.6rem;
-        height: 0.6rem;
-        border-radius: 9999px;
-        margin-right: 0.35rem;
-        background: #6b7280;
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--offline);
+        box-shadow: 0 0 0 3px var(--offline-soft);
+        transition: background 0.2s, box-shadow 0.2s;
     }
-    .health-dot.ok      { background: #34d399; }
-    .health-dot.offline { background: #f87171; }
+    .health-dot.ok      { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+    .health-dot.offline { background: var(--danger);  box-shadow: 0 0 0 3px var(--danger-soft); }
 
     .feed-container {
         position: relative;
-        background: #000;
+        margin: 0 1.1rem;
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+        background: var(--bg-inset);
         aspect-ratio: 16 / 10;
+        box-shadow: inset 0 0 0 1px var(--border-subtle);
     }
 
     .feed-container img {
@@ -61,33 +97,98 @@
     .status-bar {
         display: flex;
         align-items: center;
-        gap: 1rem;
-        padding: 0.6rem 1rem;
+        gap: 0.75rem;
+        margin: 0.75rem 1.1rem 0;
+        padding: 0.5rem 0.75rem;
+        border-radius: var(--radius-sm);
+        font-size: 0.8rem;
     }
 
-    .status-normal   { background: #065f46; }
-    .status-violence { background: #7f1d1d; }
-    .status-offline  { background: #374151; }
+    .status-normal   { background: var(--success-soft); color: var(--success-text); }
+    .status-violence {
+        background: var(--danger-soft);
+        color: var(--danger-text);
+        animation: pulse-danger 1.8s ease-in-out infinite;
+    }
+    .status-offline  { background: var(--offline-soft); color: var(--text-tertiary); }
 
-    .status-bar .label { font-weight: 700; font-size: 0.95rem; }
-    .status-bar .confidence { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 0.9rem; }
+    @keyframes pulse-danger {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(242, 73, 92, 0); }
+        50%      { box-shadow: 0 0 0 4px rgba(242, 73, 92, 0.12); }
+    }
+
+    .status-bar .label {
+        font-weight: 700;
+        font-size: 0.8rem;
+        letter-spacing: 0.02em;
+    }
+
+    .status-bar .confidence {
+        margin-left: auto;
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        font-size: 0.8rem;
+        opacity: 0.9;
+    }
 
     .counts-bar {
         display: flex;
         gap: 1.5rem;
-        padding: 0.5rem 1rem;
-        border-top: 1px solid #2a2d3a;
-        font-size: 0.85rem;
-        color: #9ca3af;
+        padding: 0.75rem 1.1rem 1.1rem;
+        margin-top: 0.25rem;
+    }
+
+    .counts-bar .stat {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .counts-bar .stat-label {
+        font-size: 0.68rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-tertiary);
+    }
+
+    .counts-bar .stat-value {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-primary);
         font-variant-numeric: tabular-nums;
     }
-    .counts-bar b { color: #d1d5db; }
+
+    .counts-bar .stat-value .unique {
+        font-weight: 400;
+        color: var(--text-tertiary);
+        font-size: 0.78rem;
+    }
+
+    .empty-state {
+        color: var(--text-tertiary);
+        font-size: 0.9rem;
+        padding: 2rem 0;
+    }
+    .empty-state code {
+        background: var(--bg-inset);
+        padding: 0.15rem 0.4rem;
+        border-radius: 4px;
+        color: var(--text-secondary);
+    }
 </style>
 {% endblock %}
 
-{% block content %}
-<h1 style="margin-bottom:1rem;">Live Cameras</h1>
+{% block page_header %}
+<div class="page-header">
+    <h1>Live Cameras</h1>
+    <span class="page-subtitle" id="live-pulse-text">
+        {{ cameras|length }} camera{{ 's' if cameras|length != 1 else '' }} configured
+    </span>
+</div>
+{% endblock %}
 
+{% block content %}
 {% if cameras %}
 <div class="camera-grid">
     {% for cam_id, cam in cameras.items() %}
@@ -107,14 +208,20 @@
             <span class="confidence" id="conf-{{ cam_id }}">Violence: 0.0 %</span>
         </div>
         <div class="counts-bar">
-            <span>People: <b id="people-{{ cam_id }}">0</b> (unique <b id="upeople-{{ cam_id }}">0</b>)</span>
-            <span>Vehicles: <b id="vehicles-{{ cam_id }}">0</b> (unique <b id="uvehicles-{{ cam_id }}">0</b>)</span>
+            <div class="stat">
+                <span class="stat-label">People</span>
+                <span class="stat-value"><b id="people-{{ cam_id }}">0</b> <span class="unique">(<span id="upeople-{{ cam_id }}">0</span> unique)</span></span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Vehicles</span>
+                <span class="stat-value"><b id="vehicles-{{ cam_id }}">0</b> <span class="unique">(<span id="uvehicles-{{ cam_id }}">0</span> unique)</span></span>
+            </div>
         </div>
     </div>
     {% endfor %}
 </div>
 {% else %}
-<p style="color:#6b7280;">No cameras configured. Set the <code>CAMERAS</code> environment variable.</p>
+<p class="empty-state">No cameras configured. Set the <code>CAMERAS</code> environment variable.</p>
 {% endif %}
 {% endblock %}
 
@@ -126,7 +233,12 @@
             const resp = await fetch("/api/status");
             const data = await resp.json();
 
+            let healthyCount = 0;
+            let alarmCount = 0;
+            let total = 0;
+
             for (const [camId, cam] of Object.entries(data.cameras)) {
+                total++;
                 const bar = document.getElementById("status-" + camId);
                 const labelEl = document.getElementById("label-" + camId);
                 const confEl = document.getElementById("conf-" + camId);
@@ -136,6 +248,7 @@
 
                 healthDot.className = "health-dot " + (cam.healthy ? "ok" : "offline");
                 healthText.textContent = cam.healthy ? "online" : "no signal";
+                if (cam.healthy) healthyCount++;
 
                 const det = cam.detection || {};
                 const score = det.violence_score || 0;
@@ -153,10 +266,21 @@
                 } else if (det.label === "violence") {
                     bar.className = "status-bar status-violence";
                     labelEl.textContent = "VIOLENCE";
+                    alarmCount++;
                 } else {
                     bar.className = "status-bar status-normal";
                     labelEl.textContent = "NORMAL";
                 }
+            }
+
+            const pulseText = document.getElementById("live-pulse-text");
+            if (pulseText && total > 0) {
+                pulseText.textContent = healthyCount + " / " + total + " online" +
+                    (alarmCount > 0 ? " · " + alarmCount + " in alarm" : "");
+            }
+            const pulseDot = document.getElementById("system-pulse-dot");
+            if (pulseDot) {
+                pulseDot.className = alarmCount > 0 ? "alarm" : (healthyCount === total && total > 0 ? "ok" : "");
             }
         } catch (_) { /* ignore transient errors */ }
     }

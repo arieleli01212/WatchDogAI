@@ -2,89 +2,164 @@
 
 {% block title %}Alerts - WatchDogAI{% endblock %}
 
+{% block extra_head %}
+<style>
+    .alerts-panel {
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-md);
+        overflow: hidden;
+    }
+
+    .alerts-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 1.5rem;
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid var(--border-subtle);
+        background: var(--bg-surface-raised);
+    }
+
+    .alerts-toolbar .filter-group {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .alerts-toolbar label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-tertiary);
+    }
+
+    .alerts-toolbar select {
+        background: var(--bg-inset);
+        color: var(--text-primary);
+        border: 1px solid var(--border-default);
+        padding: 0.4rem 0.7rem;
+        border-radius: var(--radius-sm);
+        font-size: 0.85rem;
+        font-weight: 500;
+        transition: border-color 0.15s, background 0.15s;
+    }
+    .alerts-toolbar select:hover { border-color: var(--border-strong); }
+    .alerts-toolbar select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+    .alerts-empty {
+        text-align: center;
+        color: var(--text-tertiary);
+        padding: 3rem 0 !important;
+    }
+
+    .alerts-footer {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        padding: 0.75rem 1.25rem;
+        background: var(--bg-surface-raised);
+    }
+
+    .type-tag {
+        font-size: 0.8rem;
+        text-transform: capitalize;
+        color: var(--text-secondary);
+    }
+</style>
+{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+    <h1>Alerts</h1>
+    <span class="page-subtitle">{{ total }} total</span>
+</div>
+{% endblock %}
+
 {% block content %}
-<h1 style="margin-bottom:0.25rem;">Alerts</h1>
+<div class="alerts-panel">
+    <form method="get" action="/alerts" class="alerts-toolbar">
+        <div class="filter-group">
+            <label for="status">Status</label>
+            <select name="status" id="status" onchange="this.form.submit()">
+                <option value="">All</option>
+                <option value="new"{% if status_filter == "new" %} selected{% endif %}>New</option>
+                <option value="reviewed"{% if status_filter == "reviewed" %} selected{% endif %}>Reviewed</option>
+                <option value="dismissed"{% if status_filter == "dismissed" %} selected{% endif %}>Dismissed</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="camera_id">Camera</label>
+            <select name="camera_id" id="camera_id" onchange="this.form.submit()">
+                <option value="">All</option>
+                {% for cam_id in camera_ids %}
+                <option value="{{ cam_id }}"{% if camera_filter == cam_id %} selected{% endif %}>{{ cam_id }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </form>
 
-<form method="get" action="/alerts" style="margin-bottom:0.5rem;display:flex;gap:1rem;align-items:center;">
-    <span>
-        <label for="status" style="font-size:0.85rem;color:#9ca3af;">Status:</label>
-        <select name="status" id="status" onchange="this.form.submit()"
-                style="background:#1e2030;color:#d1d5db;border:1px solid #2a2d3a;padding:0.3rem 0.5rem;border-radius:0.25rem;">
-            <option value="">All</option>
-            <option value="new"{% if status_filter == "new" %} selected{% endif %}>New</option>
-            <option value="reviewed"{% if status_filter == "reviewed" %} selected{% endif %}>Reviewed</option>
-            <option value="dismissed"{% if status_filter == "dismissed" %} selected{% endif %}>Dismissed</option>
-        </select>
-    </span>
-    <span>
-        <label for="camera_id" style="font-size:0.85rem;color:#9ca3af;">Camera:</label>
-        <select name="camera_id" id="camera_id" onchange="this.form.submit()"
-                style="background:#1e2030;color:#d1d5db;border:1px solid #2a2d3a;padding:0.3rem 0.5rem;border-radius:0.25rem;">
-            <option value="">All</option>
-            {% for cam_id in camera_ids %}
-            <option value="{{ cam_id }}"{% if camera_filter == cam_id %} selected{% endif %}>{{ cam_id }}</option>
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Camera</th>
+                <th>Type</th>
+                <th>Confidence</th>
+                <th>Status</th>
+                <th>Clip</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for alert in alerts %}
+            <tr id="alert-{{ alert.id }}">
+                <td>{{ alert.timestamp[:19].replace('T', ' ') }}</td>
+                <td>{{ alert.camera_id }}</td>
+                <td><span class="type-tag">{{ alert.alert_type | default('violence') }}</span></td>
+                <td>{{ "%.1f"|format(alert.confidence * 100) }} %</td>
+                <td><span class="badge {% if alert.status == 'new' %}badge-violence{% else %}badge-normal{% endif %}">{{ alert.status }}</span></td>
+                <td>
+                    {% if alert.clip_url %}
+                    <video class="clip-thumb" src="{{ alert.clip_url }}" muted preload="metadata" onclick="this.paused ? this.play() : this.pause()"></video>
+                    {% else %}
+                    &mdash;
+                    {% endif %}
+                </td>
+                <td>
+                    <button class="btn-delete" onclick="deleteAlert({{ alert.id }})">Delete</button>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="alerts-empty">No alerts found.</td></tr>
             {% endfor %}
-        </select>
-    </span>
-</form>
+        </tbody>
+    </table>
 
-<table>
-    <thead>
-        <tr>
-            <th>Time</th>
-            <th>Camera</th>
-            <th>Type</th>
-            <th>Confidence</th>
-            <th>Status</th>
-            <th>Clip</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for alert in alerts %}
-        <tr id="alert-{{ alert.id }}">
-            <td>{{ alert.timestamp }}</td>
-            <td>{{ alert.camera_id }}</td>
-            <td>{{ alert.alert_type | default('violence') }}</td>
-            <td>{{ "%.1f"|format(alert.confidence * 100) }} %</td>
-            <td><span class="badge {% if alert.status == 'new' %}badge-violence{% else %}badge-normal{% endif %}">{{ alert.status }}</span></td>
-            <td>
-                {% if alert.clip_url %}
-                <video class="clip-thumb" src="{{ alert.clip_url }}" muted preload="metadata" onclick="this.paused ? this.play() : this.pause()"></video>
+    {% if total_pages > 1 %}
+    {% set filters = (('&status=' ~ (status_filter | urlencode)) if status_filter else '') ~ (('&camera_id=' ~ (camera_filter | urlencode)) if camera_filter else '') %}
+    <div class="alerts-footer">
+        <div class="pagination">
+            {% if page > 1 %}
+            <a href="/alerts?page={{ page - 1 }}{{ filters }}">Prev</a>
+            {% endif %}
+
+            {% for p in range(1, total_pages + 1) %}
+                {% if p == page %}
+                <span class="current">{{ p }}</span>
                 {% else %}
-                &mdash;
+                <a href="/alerts?page={{ p }}{{ filters }}">{{ p }}</a>
                 {% endif %}
-            </td>
-            <td>
-                <button class="btn-delete" onclick="deleteAlert({{ alert.id }})">Delete</button>
-            </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="7" style="text-align:center;color:#6b7280;">No alerts found.</td></tr>
-        {% endfor %}
-    </tbody>
-</table>
+            {% endfor %}
 
-{% if total_pages > 1 %}
-{% set filters = (('&status=' ~ (status_filter | urlencode)) if status_filter else '') ~ (('&camera_id=' ~ (camera_filter | urlencode)) if camera_filter else '') %}
-<div class="pagination">
-    {% if page > 1 %}
-    <a href="/alerts?page={{ page - 1 }}{{ filters }}">Prev</a>
-    {% endif %}
-
-    {% for p in range(1, total_pages + 1) %}
-        {% if p == page %}
-        <span class="current">{{ p }}</span>
-        {% else %}
-        <a href="/alerts?page={{ p }}{{ filters }}">{{ p }}</a>
-        {% endif %}
-    {% endfor %}
-
-    {% if page < total_pages %}
-    <a href="/alerts?page={{ page + 1 }}{{ filters }}">Next</a>
+            {% if page < total_pages %}
+            <a href="/alerts?page={{ page + 1 }}{{ filters }}">Next</a>
+            {% endif %}
+        </div>
+    </div>
     {% endif %}
 </div>
-{% endif %}
 {% endblock %}
 
 {% block extra_scripts %}

@@ -115,6 +115,7 @@ async def alerts_page(
             "alerts": alerts,
             "page": page,
             "total_pages": total_pages,
+            "total": total,
             "status_filter": status,
             "camera_filter": camera_id,
             "camera_ids": list(request.app.state.cameras.keys()),
