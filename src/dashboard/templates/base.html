@@ -5,126 +5,297 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}WatchDogAI{% endblock %}</title>
     <style>
+        :root {
+            --bg-canvas: #0a0b0f;
+            --bg-surface: #12131a;
+            --bg-surface-raised: #171922;
+            --bg-surface-hover: #1c1e29;
+            --bg-inset: #0d0e13;
+
+            --border-subtle: #1f212b;
+            --border-default: #272a37;
+            --border-strong: #343849;
+
+            --text-primary: #f0f1f5;
+            --text-secondary: #9aa0b2;
+            --text-tertiary: #5f6478;
+
+            --accent: #7c9cf7;
+            --accent-soft: #7c9cf71a;
+
+            --success: #3ecf8e;
+            --success-soft: #3ecf8e14;
+            --success-text: #5fe0a8;
+
+            --danger: #f2495c;
+            --danger-soft: #f2495c1f;
+            --danger-text: #ff8895;
+
+            --offline: #5f6478;
+            --offline-soft: #5f64781a;
+
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+            --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.02);
+            --shadow-lg: 0 12px 32px -8px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.03);
+            --shadow-glow-danger: 0 0 0 1px rgba(242, 73, 92, 0.35), 0 8px 24px -6px rgba(242, 73, 92, 0.25);
+
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+
+            --rail-width: 76px;
+        }
+
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-            background: #0f1117;
-            color: #d1d5db;
+            font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-canvas);
+            color: var(--text-primary);
             min-height: 100vh;
         }
 
-        nav {
+        /* ---- Left navigation rail ---- */
+        .rail {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: var(--rail-width);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 1.25rem 0;
+            background: var(--bg-surface);
+            border-right: 1px solid var(--border-subtle);
+            z-index: 10;
+        }
+
+        .rail .brand {
             display: flex;
             align-items: center;
-            gap: 1.5rem;
-            padding: 0.75rem 1.5rem;
-            background: #161822;
-            border-bottom: 1px solid #2a2d3a;
-        }
-
-        nav .brand {
-            font-weight: 700;
-            font-size: 1.15rem;
-            color: #60a5fa;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-md);
+            background: var(--accent-soft);
+            color: var(--accent);
+            margin-bottom: 1.75rem;
             text-decoration: none;
         }
 
-        nav a {
-            color: #9ca3af;
-            text-decoration: none;
-            font-size: 0.95rem;
-            transition: color 0.15s;
+        .rail-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            width: 100%;
+            align-items: center;
         }
 
-        nav a:hover, nav a.active { color: #f9fafb; }
+        .rail-link {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.3rem;
+            width: 56px;
+            padding: 0.5rem 0;
+            border-radius: var(--radius-sm);
+            color: var(--text-tertiary);
+            text-decoration: none;
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .rail-link svg { width: 20px; height: 20px; }
+        .rail-link:hover { background: var(--bg-surface-hover); color: var(--text-secondary); }
+        .rail-link.active { background: var(--accent-soft); color: var(--accent); }
+
+        .rail-footer {
+            margin-top: auto;
+            width: 100%;
+            padding-top: 0.75rem;
+            border-top: 1px solid var(--border-subtle);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.3rem;
+        }
+
+        #system-pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: var(--offline);
+        }
+        #system-pulse-dot.ok { background: var(--success); }
+        #system-pulse-dot.alarm { background: var(--danger); }
+
+        /* ---- Page shell ---- */
+        .page {
+            margin-left: var(--rail-width);
+            min-height: 100vh;
+        }
+
+        .page-header {
+            display: flex;
+            align-items: baseline;
+            gap: 0.75rem;
+            padding: 2rem clamp(1.5rem, 4vw, 3rem) 1.25rem;
+        }
+
+        .page-header h1 {
+            font-size: 1.375rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--text-primary);
+        }
+
+        .page-header .page-subtitle {
+            font-size: 0.85rem;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+        }
 
         .container {
-            max-width: 1200px;
-            margin: 1.5rem auto;
-            padding: 0 1.5rem;
+            padding: 0 clamp(1.5rem, 4vw, 3rem) 3rem;
+            max-width: 1800px;
         }
 
+        /* ---- Shared components (used across pages) ---- */
         .badge {
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
-            border-radius: 9999px;
-            font-size: 0.8rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 0.3rem 0.7rem;
+            border-radius: 999px;
+            font-size: 0.72rem;
             font-weight: 600;
             text-transform: uppercase;
+            letter-spacing: 0.03em;
         }
-
-        .badge-normal  { background: #065f46; color: #6ee7b7; }
-        .badge-violence { background: #7f1d1d; color: #fca5a5; }
+        .badge::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 999px;
+            background: currentColor;
+        }
+        .badge-normal   { background: var(--success-soft); color: var(--success-text); }
+        .badge-violence { background: var(--danger-soft); color: var(--danger-text); }
 
         table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 1rem;
         }
 
         th, td {
             text-align: left;
-            padding: 0.6rem 0.75rem;
-            border-bottom: 1px solid #2a2d3a;
+            padding: 0.85rem 1.25rem;
+            border-bottom: 1px solid var(--border-subtle);
         }
 
-        th { color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
-
-        .pagination {
-            display: flex;
-            gap: 0.5rem;
-            margin-top: 1rem;
+        th {
+            color: var(--text-tertiary);
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            background: var(--bg-surface-raised);
         }
+
+        td { font-size: 0.875rem; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+        tbody tr { transition: background 0.12s ease; }
+        tbody tr:hover { background: var(--bg-surface-hover); }
+        tbody tr:last-child td { border-bottom: none; }
+
+        .pagination { display: flex; gap: 0.4rem; }
 
         .pagination a, .pagination span {
-            padding: 0.35rem 0.75rem;
-            border-radius: 0.375rem;
-            font-size: 0.85rem;
+            min-width: 2rem;
+            text-align: center;
+            padding: 0.35rem 0.6rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.82rem;
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
             text-decoration: none;
-            color: #d1d5db;
-            background: #1e2030;
-            border: 1px solid #2a2d3a;
+            color: var(--text-secondary);
+            background: var(--bg-inset);
+            border: 1px solid var(--border-subtle);
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
         }
 
-        .pagination span.current { background: #3b82f6; color: #fff; border-color: #3b82f6; }
-        .pagination a:hover { background: #2a2d3a; }
+        .pagination a:hover { background: var(--bg-surface-hover); color: var(--text-primary); border-color: var(--border-default); }
+        .pagination span.current { background: var(--accent); color: #0a0b0f; border-color: var(--accent); font-weight: 600; }
 
         .clip-thumb {
-            width: 120px;
-            height: 68px;
+            width: 108px;
+            height: 61px;
             object-fit: cover;
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             cursor: pointer;
-            background: #000;
+            background: var(--bg-inset);
+            border: 1px solid var(--border-subtle);
+            transition: border-color 0.15s, transform 0.15s;
         }
+        .clip-thumb:hover { border-color: var(--accent); transform: scale(1.03); }
 
         .btn-delete {
-            padding: 0.3rem 0.7rem;
-            border: 1px solid #7f1d1d;
-            border-radius: 0.375rem;
+            padding: 0.35rem 0.8rem;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-sm);
             background: transparent;
-            color: #fca5a5;
-            font-size: 0.8rem;
+            color: var(--text-secondary);
+            font-size: 0.78rem;
+            font-weight: 500;
             cursor: pointer;
-            transition: background 0.15s, color 0.15s;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
         }
-
         .btn-delete:hover {
-            background: #7f1d1d;
-            color: #fff;
+            background: var(--danger-soft);
+            color: var(--danger-text);
+            border-color: rgba(242, 73, 92, 0.4);
         }
     </style>
     {% block extra_head %}{% endblock %}
 </head>
 <body>
-    <nav>
-        <a class="brand" href="/">WatchDogAI</a>
-        <a href="/">Live View</a>
-        <a href="/alerts">Alerts</a>
-    </nav>
-    <div class="container">
-        {% block content %}{% endblock %}
+    <aside class="rail">
+        <a class="brand" href="/" aria-label="WatchDogAI">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2 4 5v6c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V5l-8-3Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </a>
+        <nav class="rail-nav">
+            <a class="rail-link {% if request.url.path == '/' %}active{% endif %}" href="/">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="3" y="6" width="13" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/>
+                    <path d="M16 10.5l4.2-2.4a.8.8 0 0 1 1.2.7v6.4a.8.8 0 0 1-1.2.7L16 13.5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                </svg>
+                <span>Live</span>
+            </a>
+            <a class="rail-link {% if request.url.path == '/alerts' %}active{% endif %}" href="/alerts">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 3a5 5 0 0 0-5 5v3.2c0 .7-.25 1.4-.7 1.95L4.6 15.3a1 1 0 0 0 .77 1.63h13.26a1 1 0 0 0 .77-1.63l-1.7-2.15a3.1 3.1 0 0 1-.7-1.95V8a5 5 0 0 0-5-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                    <path d="M9.5 19.5a2.5 2.5 0 0 0 5 0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+                <span>Alerts</span>
+            </a>
+        </nav>
+        <div class="rail-footer">
+            <span id="system-pulse-dot"></span>
+            <span style="font-size:0.6rem;color:var(--text-tertiary);">SYS</span>
+        </div>
+    </aside>
+    <div class="page">
+        {% block page_header %}{% endblock %}
+        <div class="container">
+            {% block content %}{% endblock %}
+        </div>
     </div>
     {% block extra_scripts %}{% endblock %}
 </body>
