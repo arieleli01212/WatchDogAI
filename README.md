@@ -14,10 +14,12 @@ prerequisites guide (MongoDB, MQTT, GPU, service setup, troubleshooting).
 
 ## Features
 
-- **Multi-camera pipelines** — N cameras (webcam / video file / RTSP
-  stream) configured via one `CAMERAS` JSON variable; per-camera
-  capture + analysis threads, automatic stream reconnect with backoff,
-  configurable resolution/FPS
+- **Multi-camera pipelines** — N cameras (webcam / video file / folder
+  of video files / RTSP stream) configured via one `CAMERAS` JSON
+  variable; per-camera capture + analysis threads, automatic stream
+  reconnect with backoff, configurable resolution/FPS. A folder source
+  expands into one camera per file, so recorded footage batches and
+  live streams run side by side
 - **Violence detection** — pre-trained ViT classifier
   ([jaranohaal/vit-base-violence-detection](https://huggingface.co/jaranohaal/vit-base-violence-detection))
   with temporal smoothing over distinct frames
@@ -73,8 +75,9 @@ Set via environment variables or a `.env` file
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAMERAS` | — | JSON array of cameras: `[{"id", "name", "source", "width", "height", "fps"}, ...]`; source = webcam index, file path, or RTSP/HTTP URL |
-| `CAMERA_SOURCE` | `0` | Single-camera fallback when `CAMERAS` is unset |
+| `CAMERAS` | — | JSON array of cameras: `[{"id", "name", "source", "width", "height", "fps"}, ...]`; source = webcam index, file path, folder of video files (expands to one camera per file), or RTSP/HTTP URL |
+| `CAMERA_SOURCE` | `0` | Single-camera fallback when `CAMERAS` is unset; also accepts a folder |
+| `RECORD_BEHAVIOR_CLIPS` | `false` | Save a clip/alert for loitering/running/anomaly events too (violence always records) |
 | `CONFIDENCE_THRESHOLD` | `0.85` | Violence confidence threshold |
 | `CONSECUTIVE_HITS` | `3` | Distinct frames required to confirm violence |
 | `COOLDOWN_SECONDS` | `5` | Per-camera minimum seconds between alerts |

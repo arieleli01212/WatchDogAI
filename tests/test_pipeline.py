@@ -277,8 +277,33 @@ class TestBehaviorIntegration:
         "score": 0.8, "details": "present 65s",
     }
 
-    def test_behavior_event_triggers_typed_alert(self, make_pipeline):
+    def test_behavior_event_ignored_by_default(self, make_pipeline):
+        """By default (RECORD_BEHAVIOR_CLIPS unset), behavior events never record a clip."""
         pipeline, camera, recorder, stop_event = make_pipeline()
+        seq = itertools.count(1)
+        camera.get_latest_frame_with_seq.side_effect = lambda: (FAKE_FRAME, next(seq))
+        pipeline._detector.predict_frame.return_value = ("normal", 0.9)
+        pipeline._behavior.update.return_value = [self.LOITER_EVENT]
+
+        _run_analysis(pipeline, stop_event)
+
+        typed_calls = [
+            c for c in recorder.on_detection.call_args_list
+            if c.kwargs.get("alert_type") == "loitering"
+        ]
+        assert typed_calls == []
+        # Every call falls back to "no event" — no clip is ever started
+        assert all(c.args[0] is False for c in recorder.on_detection.call_args_list)
+
+    def test_behavior_event_triggers_typed_alert_when_enabled(self, make_pipeline, tmp_path):
+        settings = Settings(
+            confidence_threshold=0.85,
+            consecutive_hits=3,
+            clip_dir=str(tmp_path / "clips"),
+            db_path=str(tmp_path / "db.sqlite"),
+            record_behavior_clips=True,
+        )
+        pipeline, camera, recorder, stop_event = make_pipeline(settings=settings)
         seq = itertools.count(1)
         camera.get_latest_frame_with_seq.side_effect = lambda: (FAKE_FRAME, next(seq))
         pipeline._detector.predict_frame.return_value = ("normal", 0.9)
