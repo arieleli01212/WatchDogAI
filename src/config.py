@@ -51,6 +51,55 @@ def _validate_source(entry: dict, index: int) -> int | str:
     return source
 
 
+VIDEO_FILE_EXTENSIONS = (
+    ".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".wmv", ".flv",
+)
+
+
+def _expand_camera_configs(
+    cam_id: str,
+    source: int | str,
+    name: str,
+    width: int,
+    height: int,
+    fps: float,
+) -> list[CameraConfig]:
+    """Expand one logical camera into one-or-more CameraConfig entries.
+
+    A plain webcam index, file path, or stream URL produces exactly one
+    entry, unchanged. A source that is a *directory* is expanded into one
+    entry per video file found directly inside it (non-recursive, sorted
+    by filename), each running as its own independent camera pipeline
+    with its own id (``<cam_id>-0``, ``<cam_id>-1``, ...), dashboard
+    card, and alert attribution — this is how a folder of recorded
+    footage is processed alongside live camera streams.
+    """
+    if not isinstance(source, str) or not os.path.isdir(source):
+        return [CameraConfig(id=cam_id, source=source, name=name or cam_id,
+                              width=width, height=height, fps=fps)]
+
+    files = sorted(
+        f for f in os.listdir(source)
+        if os.path.splitext(f)[1].lower() in VIDEO_FILE_EXTENSIONS
+    )
+    if not files:
+        raise ValueError(
+            f"Camera {cam_id!r}: source folder {source!r} contains no "
+            f"video files ({', '.join(VIDEO_FILE_EXTENSIONS)})"
+        )
+
+    base_name = name or cam_id
+    return [
+        CameraConfig(
+            id=f"{cam_id}-{i}",
+            source=os.path.join(source, filename),
+            name=f"{base_name} ({filename})",
+            width=width, height=height, fps=fps,
+        )
+        for i, filename in enumerate(files)
+    ]
+
+
 @dataclass(frozen=True)
 class CameraConfig:
     """Configuration for a single camera.
@@ -81,10 +130,16 @@ def _get_cameras() -> tuple[CameraConfig, ...]:
     Example::
 
         CAMERAS=[{"id": "cam-north", "name": "North Gate", "source": "rtsp://10.0.0.11/stream"},
-                 {"id": "cam-south", "name": "South Gate", "source": "rtsp://10.0.0.12/stream"}]
+                 {"id": "cam-south", "name": "South Gate", "source": "rtsp://10.0.0.12/stream"},
+                 {"id": "archive", "name": "Archived footage", "source": "C:/footage/2026-07-05"}]
+
+    A ``source`` that is a directory path expands into one camera per
+    video file found inside it (ids ``archive-0``, ``archive-1``, ...),
+    letting live camera streams and a folder of recorded video files run
+    side by side in the same deployment.
 
     Falls back to a single camera from CAMERA_SOURCE (default webcam 0)
-    when CAMERAS is not set.
+    when CAMERAS is not set; CAMERA_SOURCE also accepts a folder path.
     """
     raw = os.getenv("CAMERAS", "").strip()
     if raw:
@@ -104,9 +159,9 @@ def _get_cameras() -> tuple[CameraConfig, ...]:
                     f"CAMERAS entry {i}: id {cam_id!r} may only contain "
                     "letters, digits, '-' and '_'"
                 )
-            cameras.append(
-                CameraConfig(
-                    id=cam_id,
+            cameras.extend(
+                _expand_camera_configs(
+                    cam_id=cam_id,
                     source=_validate_source(entry, i),
                     name=str(entry.get("name", "") or cam_id),
                     width=int(entry.get("width", 0)),
@@ -120,7 +175,9 @@ def _get_cameras() -> tuple[CameraConfig, ...]:
         return tuple(cameras)
 
     source = _parse_source(os.getenv("CAMERA_SOURCE", "0"))
-    return (CameraConfig(id="cam0", source=source, name="Camera 0"),)
+    return tuple(_expand_camera_configs(
+        cam_id="cam0", source=source, name="Camera 0", width=0, height=0, fps=0.0,
+    ))
 
 
 @dataclass(frozen=True)
@@ -202,6 +259,10 @@ class Settings:
     )
     behavior_event_cooldown: float = field(
         default_factory=lambda: float(os.getenv("BEHAVIOR_EVENT_COOLDOWN", "30"))
+    )
+    record_behavior_clips: bool = field(
+        default_factory=lambda: os.getenv("RECORD_BEHAVIOR_CLIPS", "false").lower()
+        in ("1", "true", "yes")
     )
     control_center_url: str = field(
         default_factory=lambda: os.getenv("CONTROL_CENTER_URL", "")

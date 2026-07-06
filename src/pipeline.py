@@ -188,7 +188,10 @@ class CameraPipeline:
                 "last_update": time.time(),
             }
 
-            # Violence takes precedence; otherwise behavior events trigger clips
+            # Violence always records. Behavior events (loitering, running,
+            # anomalous movement) are surfaced live in the status feed above
+            # regardless, but only trigger a saved clip/alert when explicitly
+            # enabled via RECORD_BEHAVIOR_CLIPS.
             if is_confirmed:
                 self.clip_recorder.on_detection(True, confidence, alert_type="violence")
             elif behavior_events:
@@ -197,9 +200,12 @@ class CameraPipeline:
                     "Camera %s: behavior event %s (track %s): %s",
                     self.config.id, top["type"], top["track_id"], top["details"],
                 )
-                self.clip_recorder.on_detection(
-                    True, top["score"], alert_type=top["type"]
-                )
+                if self._settings.record_behavior_clips:
+                    self.clip_recorder.on_detection(
+                        True, top["score"], alert_type=top["type"]
+                    )
+                else:
+                    self.clip_recorder.on_detection(False, confidence)
             else:
                 self.clip_recorder.on_detection(False, confidence)
 

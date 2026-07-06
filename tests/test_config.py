@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from src.config import CameraConfig, Settings, get_settings
@@ -205,6 +207,96 @@ class TestCamerasFromEnv:
         monkeypatch.setenv("CAMERAS", '[{"id": "c1", "source": 1.5}]')
         with pytest.raises(ValueError):
             Settings()
+
+
+class TestFolderSourceExpansion:
+    """A camera source pointing at a folder expands into one camera per file."""
+
+    @pytest.fixture()
+    def video_folder(self, tmp_path):
+        folder = tmp_path / "footage"
+        folder.mkdir()
+        (folder / "b_second.mp4").write_bytes(b"fake")
+        (folder / "a_first.avi").write_bytes(b"fake")
+        (folder / "notes.txt").write_bytes(b"not a video")  # must be ignored
+        return folder
+
+    def test_cameras_entry_folder_expands_per_file(self, monkeypatch, video_folder):
+        monkeypatch.setenv(
+            "CAMERAS", json.dumps([{"id": "archive", "source": str(video_folder)}])
+        )
+        settings = Settings()
+        assert [c.id for c in settings.cameras] == ["archive-0", "archive-1"]
+
+    def test_files_sorted_by_name(self, monkeypatch, video_folder):
+        monkeypatch.setenv(
+            "CAMERAS", json.dumps([{"id": "archive", "source": str(video_folder)}])
+        )
+        settings = Settings()
+        # a_first.avi sorts before b_second.mp4
+        assert settings.cameras[0].source.endswith("a_first.avi")
+        assert settings.cameras[1].source.endswith("b_second.mp4")
+
+    def test_non_video_files_ignored(self, monkeypatch, video_folder):
+        monkeypatch.setenv(
+            "CAMERAS", json.dumps([{"id": "archive", "source": str(video_folder)}])
+        )
+        settings = Settings()
+        assert len(settings.cameras) == 2  # notes.txt excluded
+
+    def test_name_includes_filename(self, monkeypatch, video_folder):
+        monkeypatch.setenv(
+            "CAMERAS",
+            json.dumps([{"id": "archive", "name": "Archived", "source": str(video_folder)}]),
+        )
+        settings = Settings()
+        assert settings.cameras[0].name == "Archived (a_first.avi)"
+
+    def test_folder_expansion_coexists_with_live_camera(self, monkeypatch, video_folder):
+        monkeypatch.setenv(
+            "CAMERAS",
+            json.dumps([
+                {"id": "live", "source": "rtsp://10.0.0.1/stream"},
+                {"id": "archive", "source": str(video_folder)},
+            ]),
+        )
+        settings = Settings()
+        ids = [c.id for c in settings.cameras]
+        assert ids == ["live", "archive-0", "archive-1"]
+        assert settings.cameras[0].source == "rtsp://10.0.0.1/stream"
+
+    def test_empty_folder_raises(self, monkeypatch, tmp_path):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        monkeypatch.setenv(
+            "CAMERAS", json.dumps([{"id": "archive", "source": str(empty)}])
+        )
+        with pytest.raises(ValueError):
+            Settings()
+
+    def test_camera_source_fallback_supports_folder(self, monkeypatch, video_folder):
+        monkeypatch.delenv("CAMERAS", raising=False)
+        monkeypatch.setenv("CAMERA_SOURCE", str(video_folder))
+        settings = Settings()
+        assert [c.id for c in settings.cameras] == ["cam0-0", "cam0-1"]
+
+    def test_single_file_source_unaffected(self, monkeypatch, tmp_path):
+        """A plain file path (not a directory) must not be treated as a folder."""
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"fake")
+        monkeypatch.delenv("CAMERAS", raising=False)
+        monkeypatch.setenv("CAMERA_SOURCE", str(video))
+        settings = Settings()
+        assert len(settings.cameras) == 1
+        assert settings.cameras[0].id == "cam0"
+        assert settings.cameras[0].source == str(video)
+
+    def test_webcam_index_unaffected(self, monkeypatch):
+        monkeypatch.delenv("CAMERAS", raising=False)
+        monkeypatch.setenv("CAMERA_SOURCE", "0")
+        settings = Settings()
+        assert len(settings.cameras) == 1
+        assert settings.cameras[0].source == 0
 
 
 class TestGetSettings:
