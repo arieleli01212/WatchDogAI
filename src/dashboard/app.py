@@ -75,6 +75,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.cameras = {}        # camera_id -> Camera
     app.state.camera_status = {}  # camera_id -> latest analysis status dict
     app.state.alert_manager = None
+    app.state.pipeline_manager = None  # runtime source-mode switching
 
     # Mount clip files for serving video
     clips_dir = Path(settings.clip_dir)

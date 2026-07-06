@@ -180,6 +180,23 @@ def _get_cameras() -> tuple[CameraConfig, ...]:
     ))
 
 
+def recordings_camera_configs(recordings_dir: str) -> tuple[CameraConfig, ...]:
+    """Build the camera list for recordings mode: one camera per video file.
+
+    Re-scans the folder on every call, so files added since startup are
+    picked up by the next switch into recordings mode. Raises ValueError
+    when the folder is missing or holds no video files.
+    """
+    if not recordings_dir or not os.path.isdir(recordings_dir):
+        raise ValueError(
+            f"RECORDINGS_DIR {recordings_dir!r} is not an existing folder"
+        )
+    return tuple(_expand_camera_configs(
+        cam_id="rec", source=recordings_dir, name="Recording",
+        width=0, height=0, fps=0.0,
+    ))
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable application settings.
@@ -189,6 +206,12 @@ class Settings:
     """
 
     cameras: tuple[CameraConfig, ...] = field(default_factory=_get_cameras)
+    source_mode: str = field(
+        default_factory=lambda: os.getenv("SOURCE_MODE", "live")
+    )
+    recordings_dir: str = field(
+        default_factory=lambda: os.getenv("RECORDINGS_DIR", "")
+    )
     confidence_threshold: float = field(
         default_factory=lambda: float(os.getenv("CONFIDENCE_THRESHOLD", "0.85"))
     )
