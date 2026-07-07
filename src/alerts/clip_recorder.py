@@ -5,6 +5,8 @@ from __future__ import annotations
 import enum
 import logging
 import re
+import shutil
+import subprocess
 import threading
 import time
 from collections import deque
@@ -219,10 +221,18 @@ class ClipRecorder:
                     self._state = _State.IDLE
 
     def _encode_clip(self, frames: list[np.ndarray], clip_path: Path) -> bool:
-        """Encode frames to MP4. Returns False when the writer produced nothing usable."""
+        """Encode frames to MP4. Returns False when the writer produced nothing usable.
+
+        OpenCV's ``mp4v`` fourcc produces MPEG-4 Part 2, which browsers
+        can't play (the dashboard's <video> previews render black), so
+        the clip is re-encoded to H.264 with ffmpeg when available. The
+        raw writer output goes to a temp file that is either replaced by
+        the H.264 version or renamed into place as a fallback.
+        """
         h, w = frames[0].shape[:2]
+        tmp_path = clip_path.with_name(clip_path.stem + ".tmp.mp4")
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(clip_path), fourcc, self._fps, (w, h))
+        writer = cv2.VideoWriter(str(tmp_path), fourcc, self._fps, (w, h))
         if not writer.isOpened():
             writer.release()
             return False
@@ -231,4 +241,40 @@ class ClipRecorder:
                 writer.write(frame)
         finally:
             writer.release()
+        if not (tmp_path.is_file() and tmp_path.stat().st_size > 0):
+            tmp_path.unlink(missing_ok=True)
+            return False
+
+        if not self._reencode_h264(tmp_path, clip_path):
+            tmp_path.replace(clip_path)  # fallback: keep the mp4v clip
         return clip_path.is_file() and clip_path.stat().st_size > 0
+
+    def _reencode_h264(self, src: Path, dst: Path) -> bool:
+        """Re-encode *src* to browser-playable H.264 at *dst*. Cleans up *src* on success."""
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            logger.warning(
+                "ClipRecorder[%s]: ffmpeg not found — clip %s kept as mp4v "
+                "(dashboard previews won't play it)",
+                self._camera_id, dst.name,
+            )
+            return False
+        result = subprocess.run(
+            [
+                ffmpeg, "-y", "-v", "error",
+                "-i", str(src),
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                str(dst),
+            ],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0 or not (dst.is_file() and dst.stat().st_size > 0):
+            logger.warning(
+                "ClipRecorder[%s]: H.264 re-encode failed (%s) — keeping mp4v clip",
+                self._camera_id, result.stderr.strip() or f"exit {result.returncode}",
+            )
+            dst.unlink(missing_ok=True)
+            return False
+        src.unlink(missing_ok=True)
+        return True

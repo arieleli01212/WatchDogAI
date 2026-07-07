@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -115,6 +117,51 @@ class TestStateMachine:
         alert_manager.on_clip_saved.assert_not_called()
         # Recorder must recover to IDLE so later events still record
         assert recorder._state is _State.IDLE
+
+
+class TestBrowserPlayableClips:
+    """Saved clips must be H.264 — browsers render mp4v (MPEG-4 Part 2) as black."""
+
+    @pytest.mark.skipif(
+        not (shutil.which("ffmpeg") and shutil.which("ffprobe")),
+        reason="ffmpeg/ffprobe not installed",
+    )
+    def test_saved_clip_is_h264_when_ffmpeg_available(self, recorder: ClipRecorder):
+        alert_manager = recorder._alert_manager
+
+        recorder.add_frame(FRAME)
+        recorder.on_detection(True, 0.9)
+        recorder.add_frame(FRAME)
+        recorder.on_detection(False, 0.1)
+        recorder.add_frame(FRAME)
+        _wait_for_idle(recorder)
+
+        clip_path = alert_manager.on_clip_saved.call_args.kwargs["clip_path"]
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name", "-of", "csv=p=0", clip_path],
+            capture_output=True, text=True,
+        )
+        assert probe.stdout.strip() == "h264"
+        # No leftover intermediate file next to the final clip
+        assert list(Path(clip_path).parent.glob("*.tmp*")) == []
+
+    def test_clip_saved_without_ffmpeg_falls_back_to_mp4v(self, recorder: ClipRecorder):
+        alert_manager = recorder._alert_manager
+
+        with patch("src.alerts.clip_recorder.shutil.which", return_value=None):
+            recorder.add_frame(FRAME)
+            recorder.on_detection(True, 0.9)
+            recorder.add_frame(FRAME)
+            recorder.on_detection(False, 0.1)
+            recorder.add_frame(FRAME)
+            _wait_for_idle(recorder)
+
+        alert_manager.on_clip_saved.assert_called_once()
+        clip_path = Path(alert_manager.on_clip_saved.call_args.kwargs["clip_path"])
+        assert clip_path.is_file()
+        assert clip_path.stat().st_size > 0
+        assert list(clip_path.parent.glob("*.tmp*")) == []
 
 
 class TestRobustness:
