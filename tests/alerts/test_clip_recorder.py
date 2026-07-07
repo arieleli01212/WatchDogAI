@@ -39,7 +39,9 @@ def recorder(settings: Settings) -> ClipRecorder:
     )
 
 
-def _wait_for_idle(recorder: ClipRecorder, timeout: float = 3.0) -> None:
+def _wait_for_idle(recorder: ClipRecorder, timeout: float = 20.0) -> None:
+    # Generous deadline: the Windows Media Foundation H.264 encoder can
+    # take ~2s to initialize per clip and up to ~10s on a cold start
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         with recorder._lock:
