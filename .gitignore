@@ -3,6 +3,9 @@ __pycache__/
 *.pyo
 .env
 venv/
+.venv/
+.DS_Store
+CLAUDE.md
 data/
 video/
 logs/
