@@ -299,6 +299,61 @@ class TestFolderSourceExpansion:
         assert settings.cameras[0].source == 0
 
 
+class TestSourceModeSettings:
+    """SOURCE_MODE / RECORDINGS_DIR feed the runtime source toggle."""
+
+    def test_defaults(self, monkeypatch):
+        monkeypatch.delenv("SOURCE_MODE", raising=False)
+        monkeypatch.delenv("RECORDINGS_DIR", raising=False)
+        settings = Settings()
+        assert settings.source_mode == "live"
+        assert settings.recordings_dir == ""
+
+    def test_env_overrides(self, monkeypatch):
+        monkeypatch.setenv("SOURCE_MODE", "recordings")
+        monkeypatch.setenv("RECORDINGS_DIR", "C:/footage")
+        settings = Settings()
+        assert settings.source_mode == "recordings"
+        assert settings.recordings_dir == "C:/footage"
+
+
+class TestRecordingsCameraConfigs:
+    """recordings_camera_configs builds the recordings-mode camera list."""
+
+    def test_one_camera_per_file(self, tmp_path):
+        from src.config import recordings_camera_configs
+
+        folder = tmp_path / "rec"
+        folder.mkdir()
+        (folder / "b.mp4").write_bytes(b"fake")
+        (folder / "a.avi").write_bytes(b"fake")
+
+        configs = recordings_camera_configs(str(folder))
+        assert [c.id for c in configs] == ["rec-0", "rec-1"]
+        assert configs[0].source.endswith("a.avi")
+        assert configs[0].name == "Recording (a.avi)"
+
+    def test_missing_folder_raises(self, tmp_path):
+        from src.config import recordings_camera_configs
+
+        with pytest.raises(ValueError):
+            recordings_camera_configs(str(tmp_path / "nope"))
+
+    def test_empty_string_raises(self):
+        from src.config import recordings_camera_configs
+
+        with pytest.raises(ValueError):
+            recordings_camera_configs("")
+
+    def test_file_path_raises(self, tmp_path):
+        from src.config import recordings_camera_configs
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"fake")
+        with pytest.raises(ValueError):
+            recordings_camera_configs(str(video))
+
+
 class TestGetSettings:
     """get_settings() should return a valid Settings instance."""
 

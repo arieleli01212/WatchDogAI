@@ -73,18 +73,18 @@ class TestMain:
 
     @patch("main.uvicorn")
     @patch("main.create_app")
-    @patch("main.CameraPipeline")
+    @patch("main.PipelineManager")
     @patch("main.AlertManager")
     @patch("main.ViolenceDetector")
     @patch("main.setup_logging")
     @patch("main.get_settings")
-    def test_main_builds_pipeline_per_camera(
+    def test_main_starts_manager_in_configured_mode(
         self,
         mock_get_settings,
         mock_setup_logging,
         mock_detector_cls,
         mock_alert_manager_cls,
-        mock_pipeline_cls,
+        mock_manager_cls,
         mock_create_app,
         mock_uvicorn,
     ):
@@ -93,6 +93,8 @@ class TestMain:
                 CameraConfig(id="cam-north", source=0),
                 CameraConfig(id="cam-south", source=1),
             ),
+            source_mode="recordings",
+            recordings_dir="C:/footage",
             dashboard_port=8000,
         )
         mock_get_settings.return_value = settings
@@ -100,20 +102,14 @@ class TestMain:
         mock_create_app.return_value = MagicMock()
         mock_uvicorn.run = MagicMock()  # returns immediately -> main() shuts down
 
+        manager = mock_manager_cls.return_value
+        manager.available_modes.return_value = ["live", "recordings"]
+
         from main import main
         main()
 
-        # One pipeline per configured camera, all started and cleaned up
-        assert mock_pipeline_cls.call_count == 2
-        camera_ids = [
-            call.kwargs["config"].id for call in mock_pipeline_cls.call_args_list
-        ]
-        assert camera_ids == ["cam-north", "cam-south"]
-
-        pipeline = mock_pipeline_cls.return_value
-        assert pipeline.start.call_count == 2
-        assert pipeline.join.call_count == 2
-        assert pipeline.release.call_count == 2
+        manager.start.assert_called_once_with("recordings")
+        manager.stop.assert_called_once()  # shutdown tears the pipelines down
 
         # Shared components created once
         mock_detector_cls.assert_called_once()
@@ -121,12 +117,48 @@ class TestMain:
         mock_create_app.assert_called_once_with(settings)
         mock_uvicorn.run.assert_called_once()
 
+    @patch("main.uvicorn")
+    @patch("main.create_app")
+    @patch("main.PipelineManager")
+    @patch("main.AlertManager")
+    @patch("main.ViolenceDetector")
+    @patch("main.setup_logging")
+    @patch("main.get_settings")
+    def test_main_falls_back_to_live_when_mode_unavailable(
+        self,
+        mock_get_settings,
+        mock_setup_logging,
+        mock_detector_cls,
+        mock_alert_manager_cls,
+        mock_manager_cls,
+        mock_create_app,
+        mock_uvicorn,
+    ):
+        # recordings requested but no RECORDINGS_DIR configured
+        settings = Settings(
+            cameras=(CameraConfig(id="cam0", source=0),),
+            source_mode="recordings",
+            recordings_dir="",
+        )
+        mock_get_settings.return_value = settings
+        mock_setup_logging.return_value = MagicMock()
+        mock_create_app.return_value = MagicMock()
+        mock_uvicorn.run = MagicMock()
+
+        manager = mock_manager_cls.return_value
+        manager.available_modes.return_value = ["live"]
+
+        from main import main
+        main()
+
+        manager.start.assert_called_once_with("live")
+
     @patch("main.TelemetryLoop")
     @patch("main.MqttGatewayClient")
     @patch("main.ControlCenterNotifier")
     @patch("main.uvicorn")
     @patch("main.create_app")
-    @patch("main.CameraPipeline")
+    @patch("main.PipelineManager")
     @patch("main.AlertManager")
     @patch("main.ViolenceDetector")
     @patch("main.setup_logging")
@@ -137,7 +169,7 @@ class TestMain:
         mock_setup_logging,
         mock_detector_cls,
         mock_alert_manager_cls,
-        mock_pipeline_cls,
+        mock_manager_cls,
         mock_create_app,
         mock_uvicorn,
         mock_notifier_cls,
@@ -154,6 +186,7 @@ class TestMain:
         mock_setup_logging.return_value = MagicMock()
         mock_create_app.return_value = MagicMock()
         mock_uvicorn.run = MagicMock()
+        mock_manager_cls.return_value.available_modes.return_value = ["live"]
 
         from main import main
         main()
@@ -174,18 +207,18 @@ class TestMain:
 
     @patch("main.uvicorn")
     @patch("main.create_app")
-    @patch("main.CameraPipeline")
+    @patch("main.PipelineManager")
     @patch("main.AlertManager")
     @patch("main.ViolenceDetector")
     @patch("main.setup_logging")
     @patch("main.get_settings")
-    def test_main_registers_cameras_on_app_state(
+    def test_main_wires_manager_to_app_state(
         self,
         mock_get_settings,
         mock_setup_logging,
         mock_detector_cls,
         mock_alert_manager_cls,
-        mock_pipeline_cls,
+        mock_manager_cls,
         mock_create_app,
         mock_uvicorn,
     ):
@@ -194,12 +227,17 @@ class TestMain:
         mock_setup_logging.return_value = MagicMock()
 
         app = MagicMock()
-        app.state.cameras = {}
         mock_create_app.return_value = app
         mock_uvicorn.run = MagicMock()
+        mock_manager_cls.return_value.available_modes.return_value = ["live"]
 
         from main import main
         main()
 
-        assert "cam0" in app.state.cameras
+        # The manager gets the app's shared registries so the dashboard and
+        # telemetry loop track pipeline swaps, and is exposed for the routes
+        kwargs = mock_manager_cls.call_args.kwargs
+        assert kwargs["cameras_registry"] is app.state.cameras
+        assert kwargs["status_registry"] is app.state.camera_status
+        assert app.state.pipeline_manager is mock_manager_cls.return_value
         assert app.state.alert_manager is mock_alert_manager_cls.return_value

@@ -161,6 +161,45 @@ async def api_cameras(request: Request) -> JSONResponse:
     return JSONResponse(list(_camera_snapshot(request).values()))
 
 
+@router.get("/api/source_mode")
+async def api_source_mode(request: Request) -> JSONResponse:
+    """Return the active camera source mode and the modes on offer."""
+    manager = request.app.state.pipeline_manager
+    if manager is None:
+        return JSONResponse({"mode": "live", "available": ["live"]})
+    return JSONResponse({"mode": manager.mode, "available": manager.available_modes()})
+
+
+@router.post("/api/source_mode")
+async def api_set_source_mode(request: Request) -> JSONResponse:
+    """Switch between live cameras and the recordings folder at runtime."""
+    manager = request.app.state.pipeline_manager
+    if manager is None:
+        return JSONResponse(
+            {"error": "source switching not available"}, status_code=503
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    mode = body.get("mode")
+    if mode not in manager.available_modes():
+        return JSONResponse(
+            {"error": f"unknown mode {mode!r}", "available": manager.available_modes()},
+            status_code=400,
+        )
+
+    try:
+        # Opening cameras is blocking (seconds for network sources) —
+        # run the swap off the event loop
+        changed = await asyncio.to_thread(manager.switch, mode)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    return JSONResponse({"ok": True, "mode": manager.mode, "changed": changed})
+
+
 @router.get("/api/counts")
 async def api_counts(request: Request) -> JSONResponse:
     """Return live people/vehicle counts per camera."""

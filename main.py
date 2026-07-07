@@ -12,7 +12,7 @@ from src.detector.model import ViolenceDetector
 from src.alerts.manager import AlertManager
 from src.alerts.notifier import ControlCenterNotifier
 from src.mqtt.client import MqttGatewayClient, TelemetryLoop
-from src.pipeline import CameraPipeline
+from src.runtime import PipelineManager
 from src.dashboard.app import create_app
 
 
@@ -77,33 +77,35 @@ def main():
     app = create_app(settings)
     app.state.alert_manager = alert_manager
 
-    # Setup graceful shutdown
-    stop_event = threading.Event()
+    # Shutdown signal for long-lived helpers that survive source-mode swaps
+    shutdown_event = threading.Event()
 
     def shutdown_handler(signum, frame):
         logger.info("Shutdown signal received")
-        stop_event.set()
+        shutdown_event.set()
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
 
-    # One pipeline (capture + analysis threads) per configured camera
-    pipelines = []
-    for camera_config in settings.cameras:
-        pipeline = CameraPipeline(
-            config=camera_config,
-            settings=settings,
-            detector=detector,
-            alert_manager=alert_manager,
-            status_registry=app.state.camera_status,
-            stop_event=stop_event,
-        )
-        app.state.cameras[camera_config.id] = pipeline.camera
-        pipelines.append(pipeline)
+    # Pipelines are owned by the manager so the dashboard can swap the
+    # source mode (live cameras vs. recordings folder) at runtime
+    manager = PipelineManager(
+        settings=settings,
+        detector=detector,
+        alert_manager=alert_manager,
+        cameras_registry=app.state.cameras,
+        status_registry=app.state.camera_status,
+    )
+    app.state.pipeline_manager = manager
 
-    for pipeline in pipelines:
-        pipeline.start()
-        logger.info("Pipeline started for camera %s", pipeline.config.id)
+    initial_mode = settings.source_mode
+    if initial_mode not in manager.available_modes():
+        logger.warning(
+            "SOURCE_MODE=%r unavailable (is RECORDINGS_DIR set?) — using 'live'",
+            initial_mode,
+        )
+        initial_mode = "live"
+    manager.start(initial_mode)
 
     # Periodic camera-health telemetry over the gateway
     if gateway is not None:
@@ -112,7 +114,7 @@ def main():
             cameras=app.state.cameras,
             status_registry=app.state.camera_status,
             interval=settings.telemetry_interval,
-            stop_event=stop_event,
+            stop_event=shutdown_event,
             health_max_age=settings.camera_health_max_age,
         ).start()
 
@@ -121,10 +123,8 @@ def main():
         uvicorn.run(app, host="0.0.0.0", port=settings.dashboard_port, log_level="info")
     finally:
         logger.info("Shutting down...")
-        stop_event.set()
-        for pipeline in pipelines:
-            pipeline.join(timeout=5)
-            pipeline.release()
+        shutdown_event.set()
+        manager.stop()
         if notifier is not None:
             notifier.close()
         if gateway is not None:
