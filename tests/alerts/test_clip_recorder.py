@@ -163,6 +163,74 @@ class TestBrowserPlayableClips:
         assert clip_path.stat().st_size > 0
         assert list(clip_path.parent.glob("*.tmp*")) == []
 
+    def test_direct_h264_tried_first_then_mp4v_fallback(self, recorder, tmp_path):
+        """avc1 writers are probed before any mp4v fallback, and the probe result is cached."""
+        import cv2 as real_cv2
+
+        attempts: list[int] = []
+        avc1 = real_cv2.VideoWriter_fourcc(*"avc1")
+        mp4v = real_cv2.VideoWriter_fourcc(*"mp4v")
+
+        class FakeWriter:
+            """Simulates a system where only mp4v encoding works."""
+
+            def __init__(self, path, *args):
+                # Signatures: (path, fourcc, fps, size) or (path, api, fourcc, fps, size)
+                self._path = path
+                fourcc = args[1] if len(args) == 4 else args[0]
+                attempts.append(int(fourcc))
+                self._ok = int(fourcc) == mp4v
+
+            def isOpened(self):
+                return self._ok
+
+            def write(self, frame):
+                with open(self._path, "ab") as fh:
+                    fh.write(b"x")
+
+            def release(self):
+                pass
+
+        with patch("src.alerts.clip_recorder.cv2.VideoWriter", FakeWriter), \
+             patch.object(recorder, "_reencode_h264", return_value=False):
+            ok = recorder._encode_clip([FRAME, FRAME], tmp_path / "a.mp4")
+            assert ok is True
+            assert attempts[0] == avc1   # H.264 probed first
+            assert attempts[-1] == mp4v  # fallback actually used
+
+            attempts.clear()
+            recorder._encode_clip([FRAME], tmp_path / "b.mp4")
+            assert attempts == [mp4v]  # failed probe cached: no avc1 retries
+
+    def test_direct_h264_success_is_cached(self, recorder, tmp_path):
+        import cv2 as real_cv2
+
+        attempts: list[int] = []
+        avc1 = real_cv2.VideoWriter_fourcc(*"avc1")
+
+        class AlwaysWorksWriter:
+            def __init__(self, path, *args):
+                self._path = path
+                fourcc = args[1] if len(args) == 4 else args[0]
+                attempts.append(int(fourcc))
+
+            def isOpened(self):
+                return True
+
+            def write(self, frame):
+                with open(self._path, "ab") as fh:
+                    fh.write(b"x")
+
+            def release(self):
+                pass
+
+        with patch("src.alerts.clip_recorder.cv2.VideoWriter", AlwaysWorksWriter):
+            assert recorder._encode_clip([FRAME], tmp_path / "a.mp4") is True
+            assert recorder._encode_clip([FRAME], tmp_path / "b.mp4") is True
+
+        # First clip probes avc1 and succeeds; second reuses the cached combo
+        assert attempts == [avc1, avc1]
+
 
 class TestRobustness:
     """Review findings: stalled cameras, sustained events, back-to-back events."""
