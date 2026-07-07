@@ -176,6 +176,37 @@
         border-radius: 4px;
         color: var(--text-secondary);
     }
+
+    /* Source-mode toggle: live cameras vs recordings folder */
+    .mode-toggle {
+        margin-left: auto;
+        display: inline-flex;
+        padding: 3px;
+        gap: 2px;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: 999px;
+    }
+
+    .mode-toggle button {
+        border: none;
+        background: transparent;
+        color: var(--text-tertiary);
+        font: inherit;
+        font-size: 0.78rem;
+        font-weight: 600;
+        padding: 0.35rem 0.9rem;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+    }
+
+    .mode-toggle button:hover { color: var(--text-secondary); }
+    .mode-toggle button.active {
+        background: var(--accent-soft);
+        color: var(--accent);
+    }
+    .mode-toggle button:disabled { cursor: wait; opacity: 0.6; }
 </style>
 {% endblock %}
 
@@ -185,6 +216,10 @@
     <span class="page-subtitle" id="live-pulse-text">
         {{ cameras|length }} camera{{ 's' if cameras|length != 1 else '' }} configured
     </span>
+    <div class="mode-toggle" id="mode-toggle" hidden>
+        <button type="button" data-mode="live" id="mode-btn-live">Live cameras</button>
+        <button type="button" data-mode="recordings" id="mode-btn-recordings">Recordings</button>
+    </div>
 </div>
 {% endblock %}
 
@@ -287,6 +322,51 @@
 
     setInterval(poll, 500);
     poll();
+})();
+
+(function sourceModeToggle() {
+    const toggle = document.getElementById("mode-toggle");
+    const buttons = toggle.querySelectorAll("button");
+
+    function markActive(mode) {
+        buttons.forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
+    }
+
+    async function init() {
+        try {
+            const resp = await fetch("/api/source_mode");
+            const data = await resp.json();
+            // Only offer the toggle when there is something to toggle to
+            if (!data.available || !data.available.includes("recordings")) return;
+            markActive(data.mode);
+            toggle.hidden = false;
+        } catch (_) { /* leave hidden */ }
+    }
+
+    buttons.forEach(btn => btn.addEventListener("click", async () => {
+        const mode = btn.dataset.mode;
+        if (btn.classList.contains("active")) return;
+        buttons.forEach(b => b.disabled = true);
+        btn.textContent = "Switching…";
+        try {
+            const resp = await fetch("/api/source_mode", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode }),
+            });
+            if (resp.ok) {
+                location.reload();  // re-render the camera grid for the new mode
+                return;
+            }
+            const err = await resp.json().catch(() => ({}));
+            alert("Could not switch source: " + (err.error || resp.status));
+        } catch (e) {
+            alert("Could not switch source: " + e);
+        }
+        location.reload();
+    }));
+
+    init();
 })();
 </script>
 {% endblock %}

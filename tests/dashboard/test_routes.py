@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -241,6 +242,81 @@ async def test_api_delete_alert(app, client, tmp_path):
         assert resp.status_code == 404
 
     manager.storage.close()
+
+
+# ------------------------------------------------------------------
+# Source-mode switching
+# ------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_source_mode_defaults_without_manager(client):
+    async with client as ac:
+        resp = await ac.get("/api/source_mode")
+    assert resp.json() == {"mode": "live", "available": ["live"]}
+
+
+@pytest.mark.anyio
+async def test_source_mode_reports_manager_state(app, client):
+    manager = MagicMock()
+    manager.mode = "recordings"
+    manager.available_modes.return_value = ["live", "recordings"]
+    app.state.pipeline_manager = manager
+
+    async with client as ac:
+        resp = await ac.get("/api/source_mode")
+    assert resp.json() == {"mode": "recordings", "available": ["live", "recordings"]}
+
+
+@pytest.mark.anyio
+async def test_set_source_mode_without_manager_is_503(client):
+    async with client as ac:
+        resp = await ac.post("/api/source_mode", json={"mode": "recordings"})
+    assert resp.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_set_source_mode_switches(app, client):
+    manager = MagicMock()
+    manager.mode = "recordings"
+    manager.available_modes.return_value = ["live", "recordings"]
+    manager.switch.return_value = True
+    app.state.pipeline_manager = manager
+
+    async with client as ac:
+        resp = await ac.post("/api/source_mode", json={"mode": "recordings"})
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    manager.switch.assert_called_once_with("recordings")
+
+
+@pytest.mark.anyio
+async def test_set_source_mode_rejects_unknown_mode(app, client):
+    manager = MagicMock()
+    manager.available_modes.return_value = ["live"]
+    app.state.pipeline_manager = manager
+
+    async with client as ac:
+        resp = await ac.post("/api/source_mode", json={"mode": "recordings"})
+
+    assert resp.status_code == 400
+    manager.switch.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_set_source_mode_switch_failure_is_400(app, client):
+    manager = MagicMock()
+    manager.mode = "live"
+    manager.available_modes.return_value = ["live", "recordings"]
+    manager.switch.side_effect = ValueError("folder is empty")
+    app.state.pipeline_manager = manager
+
+    async with client as ac:
+        resp = await ac.post("/api/source_mode", json={"mode": "recordings"})
+
+    assert resp.status_code == 400
+    assert "empty" in resp.json()["error"]
 
 
 # ------------------------------------------------------------------
