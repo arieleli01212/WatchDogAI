@@ -229,6 +229,9 @@ async def api_alerts(
         )
     else:
         alerts = []
+    clip_dir = request.app.state.settings.clip_dir
+    for alert in alerts:
+        alert["clip_url"] = _clip_url(alert.get("clip_path", ""), clip_dir)
     return JSONResponse(alerts)
 
 

@@ -112,7 +112,7 @@
                 <th>Actions</th>
             </tr>
         </thead>
-        <tbody>
+        <tbody id="alerts-tbody">
             {% for alert in alerts %}
             <tr id="alert-{{ alert.id }}">
                 <td>{{ alert.timestamp[:19].replace('T', ' ') }}</td>
@@ -174,5 +174,100 @@ async function deleteAlert(id) {
         alert('Failed to delete alert.');
     }
 }
+
+/* Live updates: poll the alerts API for the current page + filters and
+   re-render the table body only when the data actually changed, so new
+   alerts appear within seconds without a manual refresh. */
+(function liveAlerts() {
+    const tbody = document.getElementById("alerts-tbody");
+    if (!tbody) return;
+
+    const pageParams = new URLSearchParams(window.location.search);
+    const page = Math.max(1, parseInt(pageParams.get("page") || "1", 10));
+    const perPage = 20;
+    const query = new URLSearchParams({
+        limit: String(perPage),
+        offset: String((page - 1) * perPage),
+    });
+    if (pageParams.get("status")) query.set("status", pageParams.get("status"));
+    if (pageParams.get("camera_id")) query.set("camera_id", pageParams.get("camera_id"));
+
+    let lastSignature = null;
+
+    function cell(child) {
+        const td = document.createElement("td");
+        if (typeof child === "string") td.textContent = child;
+        else if (child) td.appendChild(child);
+        return td;
+    }
+
+    function render(alerts) {
+        tbody.replaceChildren();
+        if (!alerts.length) {
+            const tr = document.createElement("tr");
+            const td = document.createElement("td");
+            td.colSpan = 7;
+            td.className = "alerts-empty";
+            td.textContent = "No alerts found.";
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+            return;
+        }
+        for (const a of alerts) {
+            const tr = document.createElement("tr");
+            tr.id = "alert-" + a.id;
+
+            tr.appendChild(cell((a.timestamp || "").slice(0, 19).replace("T", " ")));
+            tr.appendChild(cell(a.camera_id || ""));
+
+            const type = document.createElement("span");
+            type.className = "type-tag";
+            type.textContent = a.alert_type || "violence";
+            tr.appendChild(cell(type));
+
+            tr.appendChild(cell((a.confidence * 100).toFixed(1) + " %"));
+
+            const badge = document.createElement("span");
+            badge.className = "badge " + (a.status === "new" ? "badge-violence" : "badge-normal");
+            badge.textContent = a.status;
+            tr.appendChild(cell(badge));
+
+            if (a.clip_url) {
+                const video = document.createElement("video");
+                video.className = "clip-thumb";
+                video.src = a.clip_url;
+                video.muted = true;
+                video.preload = "metadata";
+                video.addEventListener("click", () => video.paused ? video.play() : video.pause());
+                tr.appendChild(cell(video));
+            } else {
+                tr.appendChild(cell("—"));
+            }
+
+            const del = document.createElement("button");
+            del.className = "btn-delete";
+            del.textContent = "Delete";
+            del.addEventListener("click", () => deleteAlert(a.id));
+            tr.appendChild(cell(del));
+
+            tbody.appendChild(tr);
+        }
+    }
+
+    async function poll() {
+        try {
+            const resp = await fetch("/api/alerts?" + query.toString());
+            if (!resp.ok) return;
+            const alerts = await resp.json();
+            const signature = JSON.stringify(alerts.map(a => [a.id, a.status]));
+            if (signature === lastSignature) return;
+            lastSignature = signature;
+            render(alerts);
+        } catch (_) { /* ignore transient errors */ }
+    }
+
+    setInterval(poll, 3000);
+    poll();
+})();
 </script>
 {% endblock %}

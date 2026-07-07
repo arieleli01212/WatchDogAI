@@ -188,7 +188,32 @@ async def test_api_alerts_with_alert_manager(app, client, tmp_path):
         assert len(data) == 1
         assert data[0]["camera_id"] == "cam1"
         assert data[0]["alert_type"] == "violence"
+        # clip_url is included so clients (live alerts table, control
+        # center) can play clips; None when the path isn't under clip_dir
+        assert "clip_url" in data[0]
 
+    manager.storage.close()
+
+
+@pytest.mark.anyio
+async def test_api_alerts_clip_url_resolves_real_clips(app, client, tmp_path):
+    clip_dir = tmp_path / "clips"
+    (clip_dir / "2026-07-07").mkdir(parents=True, exist_ok=True)
+    clip = clip_dir / "2026-07-07" / "10-00-00-000_cam0.mp4"
+    clip.write_bytes(b"vid")
+
+    settings = Settings(
+        db_backend="sqlite",
+        db_path=str(tmp_path / "alerts3.db"),
+        cooldown_seconds=0,
+    )
+    manager = AlertManager(settings)
+    manager.on_clip_saved(confidence=0.9, clip_path=str(clip), camera_id="cam0")
+    app.state.alert_manager = manager
+
+    async with client as ac:
+        resp = await ac.get("/api/alerts")
+    assert resp.json()[0]["clip_url"] == "/clips/2026-07-07/10-00-00-000_cam0.mp4"
     manager.storage.close()
 
 

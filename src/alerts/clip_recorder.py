@@ -21,6 +21,14 @@ from src.config import Settings
 
 logger = logging.getLogger(__name__)
 
+# Direct H.264 writer candidates, tried in order. Browsers only play
+# H.264 ("avc1") in <video>, not MPEG-4 Part 2 ("mp4v") — on Windows the
+# Media Foundation backend provides H.264 natively, no ffmpeg needed.
+H264_WRITER_CANDIDATES: tuple[tuple[str, int | None], ...] = (
+    ("avc1", getattr(cv2, "CAP_MSMF", None)),
+    ("avc1", None),
+)
+
 
 class _State(enum.Enum):
     IDLE = "idle"
@@ -76,6 +84,10 @@ class ClipRecorder:
         self._post_deadline: float | None = None
         self._rec_confidence: float = 0.0
         self._rec_alert_type: str = "violence"
+        # Direct-H.264 probe result, cached after the first clip:
+        # None = not probed yet, False = unavailable on this system,
+        # (fourcc, api) = the working writer combination
+        self._direct_h264: tuple[str, int | None] | bool | None = None
 
     # ------------------------------------------------------------------
     # Public API (called from different threads)
@@ -221,18 +233,66 @@ class ClipRecorder:
                     self._state = _State.IDLE
 
     def _encode_clip(self, frames: list[np.ndarray], clip_path: Path) -> bool:
-        """Encode frames to MP4. Returns False when the writer produced nothing usable.
+        """Encode frames to a browser-playable MP4.
 
-        OpenCV's ``mp4v`` fourcc produces MPEG-4 Part 2, which browsers
-        can't play (the dashboard's <video> previews render black), so
-        the clip is re-encoded to H.264 with ffmpeg when available. The
-        raw writer output goes to a temp file that is either replaced by
-        the H.264 version or renamed into place as a fallback.
+        Browsers only decode H.264 in <video>; OpenCV's default ``mp4v``
+        (MPEG-4 Part 2) renders as a dead black player on the dashboard.
+        Three tiers, best first:
+
+        1. Direct H.264 via an OpenCV writer (Windows Media Foundation
+           provides this natively) — single pass, no external tools.
+        2. ``mp4v`` to a temp file, re-encoded to H.264 by ffmpeg when
+           it is installed (typical on Linux servers).
+        3. Keep the ``mp4v`` clip — still plays in VLC and still uploads
+           to the control center, with a warning about browser previews.
+
+        Returns False only when nothing usable was written.
         """
         h, w = frames[0].shape[:2]
+
+        # Tier 1: direct H.264 (probed once, then cached per recorder)
+        if self._direct_h264 is not False:
+            candidates = (
+                [self._direct_h264]
+                if self._direct_h264
+                else list(H264_WRITER_CANDIDATES)
+            )
+            for fourcc_str, api in candidates:
+                if self._write_with(clip_path, fourcc_str, api, frames, w, h):
+                    self._direct_h264 = (fourcc_str, api)
+                    return True
+            self._direct_h264 = False
+            logger.warning(
+                "ClipRecorder[%s]: no native H.264 encoder available — "
+                "falling back to mp4v (+ ffmpeg re-encode when installed)",
+                self._camera_id,
+            )
+
+        # Tier 2/3: mp4v temp file, then ffmpeg re-encode or keep as-is
         tmp_path = clip_path.with_name(clip_path.stem + ".tmp.mp4")
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(tmp_path), fourcc, self._fps, (w, h))
+        if not self._write_with(tmp_path, "mp4v", None, frames, w, h):
+            tmp_path.unlink(missing_ok=True)
+            return False
+
+        if not self._reencode_h264(tmp_path, clip_path):
+            tmp_path.replace(clip_path)  # fallback: keep the mp4v clip
+        return clip_path.is_file() and clip_path.stat().st_size > 0
+
+    def _write_with(
+        self,
+        path: Path,
+        fourcc_str: str,
+        api: int | None,
+        frames: list[np.ndarray],
+        w: int,
+        h: int,
+    ) -> bool:
+        """Write frames with one specific fourcc/backend; validate the output."""
+        fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
+        if api is None:
+            writer = cv2.VideoWriter(str(path), fourcc, self._fps, (w, h))
+        else:
+            writer = cv2.VideoWriter(str(path), api, fourcc, self._fps, (w, h))
         if not writer.isOpened():
             writer.release()
             return False
@@ -241,13 +301,10 @@ class ClipRecorder:
                 writer.write(frame)
         finally:
             writer.release()
-        if not (tmp_path.is_file() and tmp_path.stat().st_size > 0):
-            tmp_path.unlink(missing_ok=True)
-            return False
-
-        if not self._reencode_h264(tmp_path, clip_path):
-            tmp_path.replace(clip_path)  # fallback: keep the mp4v clip
-        return clip_path.is_file() and clip_path.stat().st_size > 0
+        if path.is_file() and path.stat().st_size > 0:
+            return True
+        path.unlink(missing_ok=True)
+        return False
 
     def _reencode_h264(self, src: Path, dst: Path) -> bool:
         """Re-encode *src* to browser-playable H.264 at *dst*. Cleans up *src* on success."""
